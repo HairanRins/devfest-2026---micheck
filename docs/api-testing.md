@@ -24,7 +24,7 @@ Changes made in this step:
 - `lib/openapi.ts`:
   - added 7 named examples to the **Examples** dropdown of `/claims` and `/investigate`, based on the demo scenarios in PRODUCT_SCOPE §5
   - added an example `id` for `/investigations/{id}`
-  - corrected the `/investigate` description: it promised guarantees that the code does not enforce yet (see §6)
+  - corrected the `/investigate` description: it promised guarantees that the code does not enforce yet (see §7)
   - marked `/bot/bot_recommandation` as `deprecated` and non-functional
 
 Open the UI with `npm run dev`, then go to <http://localhost:3000/api/docs>. The raw spec is at <http://localhost:3000/api/openapi>.
@@ -49,7 +49,8 @@ Copy `.env.example` to `.env.local` and restart `npm run dev` after any change.
 | Variable | Required? | Default | Purpose |
 |---|---|---|---|
 | `CONTEXT_DETECTOR_LOCAL_FALLBACK` | No | `off` | `on`: when every remote provider fails, Qwen2.5-3B answers locally. The result is marked `indicative`. Requires `npm run models:install` and `npm run models:download`. |
-| `CONTEXT_DETECTOR_LOCAL_MODEL_PATH` | No | `models/qwen2.5-3b-instruct-q4_k_m.gguf` | GGUF file to load, for example a 1.5B model on a machine with less RAM |
+| `CONTEXT_DETECTOR_LOCAL_MODEL_PATH` | No | `local-models/qwen2.5-3b-instruct-q4_k_m.gguf` | GGUF file to load, for example a 1.5B model on a machine with less RAM |
+| `CONTEXT_DETECTOR_OCR_LANG_DIR` | No | `local-models/tesseract` | Folder where the OCR language data (`fra`, `eng`) is copied from `node_modules` on first use |
 | `CONTEXT_DETECTOR_LOCAL_TIMEOUT_MS` | No | `300000` | Time limit for each local generation |
 
 #### Web search
@@ -320,7 +321,29 @@ Errors use the format `{ "message": "…", "code": "…" }`:
 
 This is the chatbot from the old e-commerce shop. It is marked `deprecated` in Swagger and **does not work** in this repository: `@langchain/*` is not installed and `@/data/prompt-data` is missing. It is documented here only for completeness. Example body: `{ "prompt": "Quel produit me conseillez-vous pour un cadeau ?" }`
 
-## 5. Quick test checklist
+## 5. Automated integration tests
+
+`npm test` runs **55 tests** in about 35 s, with no network and no API key. They use Node's built-in test runner, so there's nothing extra to install beyond the project's `typescript` and `next`. Each test calls the real route handler with a real `NextRequest`. Only the outgoing `fetch` calls (AI and search providers) are simulated, and any unexpected host makes the test fail.
+
+| File | What it covers |
+|---|---|
+| `tests/context-detector/text-endpoints.test.ts` (20) | **Valid input:** `/claims` and `/investigate` with a 201 dossier, report and `generated_by`; the dossier fetched back by id. **PRODUCT_SCOPE §6:** no URL, excerpt or date invented by the model; every verdict cites evidence or is `unverifiable`. **Invalid input** returns 400 with no AI call: empty, missing content, over 20,000 characters, not JSON. Also covers 404, 503 with no provider, and 502 for a provider error or an answer that isn't JSON. |
+| `tests/context-detector/media-signals.test.ts` (20) | **Valid** JPEG, PNG and WebP: EXIF data with GPS reported as present but no coordinates; image-generator fields; a lying file name or type; the §7 disclaimer. **Invalid:** no file, text instead of a file, 2 files, empty file, GIF, GIF renamed `.png`, truncated image, non-multipart body, broken multipart, invalid `ocr` flag. **Oversized:** exactly 4 MB is accepted; 4 MB + 1 byte and 10 MB return 413; an announced `Content-Length` returns 413 without the body being read. **Local OCR:** text, quality level, and the indicative marking. |
+| `tests/context-detector/fallback.test.ts` (14) | **Primary fails, remote fallback:** Groq returns 429, 500, an answer without JSON, or times out, and Gemini answers, with `attempts` recorded. The primary is used again once it recovers. 502 lists every attempt when the local fallback is off. **Local fallback:** everything remote fails and the local model answers, with `indicative`, confidence `low`, the limitation and the banner. The anti-fabrication rules still apply, one JSON schema is used per step, and offline mode works. **Pauses:** after a 429 with `Retry-After`, or a 401, the provider is skipped without being called. |
+| `tests/context-detector/fallback-unavailable.test.ts` (1) | The local fallback is on but the model file is missing: 502 with the `npm run models:download` hint |
+
+**The suite catches real breakage.** Removing the confidence cap, the 4 MB check, or the provider pause each makes the matching tests fail.
+
+```bash
+npm test                                                     # whole suite
+node --no-experimental-strip-types --import ./tests/setup/register.mjs \
+  --test tests/context-detector/fallback.test.ts             # one file
+#   add --test-name-pattern="timeout" to run a single test
+```
+
+**Not covered by these tests:** the real `node-llama-cpp` and `tesseract.js` packages, which are replaced by stand-ins in `tests/fixtures/fakes/`, and the real AI and search services. See ADR-002 §5 for checking those by hand.
+
+## 6. Quick test checklist
 
 Based on the success criteria in PRODUCT_SCOPE §6.
 
@@ -337,7 +360,7 @@ Based on the success criteria in PRODUCT_SCOPE §6.
 - [ ] `media-signals` returns 200 for a JPEG, PNG and WebP, 415 for a GIF, and 413 for a file over 4 MB. A photo with GPS data returns `gps_present: true` and no coordinates.
 - [ ] The time shown by Swagger ("Duration") stays under 60 s per scenario, as PRODUCT_SCOPE §6 requires.
 
-## 6. Gaps between PRODUCT_SCOPE.md and the code
+## 7. Gaps between PRODUCT_SCOPE.md and the code
 
 These are things to keep in mind during testing and the demo.
 

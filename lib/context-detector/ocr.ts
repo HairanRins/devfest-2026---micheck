@@ -13,7 +13,11 @@ const PACKAGE_NAME = "tesseract.js";
 const LANGUAGES = ["fra", "eng"];
 const OCR_TIMEOUT_MS = 30 * 1000;
 const MAX_TEXT_LENGTH = 20000; // same limit as /investigate
-const LANG_DIR = path.resolve("models/tesseract");
+const DEFAULT_LANG_DIR = "local-models/tesseract";
+
+// Read on each use (not at import) so the folder follows the configuration.
+const getLangDir = (): string =>
+    path.resolve(process.env.CONTEXT_DETECTOR_OCR_LANG_DIR?.trim() || DEFAULT_LANG_DIR);
 
 class OcrUnavailableError extends Error {}
 
@@ -38,12 +42,12 @@ export const OCR_PROVIDER: Omit<AiProviderInfo, "attempts"> = {
 
 // Tesseract.js reads every language from one directory, while each language is
 // published as its own npm package: copy both .traineddata.gz files side by side.
-const prepareLanguageData = (): void => {
+const prepareLanguageData = (langDir: string): void => {
     const require = createRequire(path.join(process.cwd(), "package.json"));
-    mkdirSync(LANG_DIR, { recursive: true });
+    mkdirSync(langDir, { recursive: true });
 
     for (const lang of LANGUAGES) {
-        const target = path.join(LANG_DIR, `${lang}.traineddata.gz`);
+        const target = path.join(langDir, `${lang}.traineddata.gz`);
         if (existsSync(target)) {
             continue;
         }
@@ -80,11 +84,12 @@ const getWorker = (): Promise<TesseractWorker> => {
                 `Paquet ${PACKAGE_NAME} non installé : lancez « npm run models:install ».`,
             );
         }
-        prepareLanguageData();
+        const langDir = getLangDir();
+        prepareLanguageData(langDir);
         // OEM 1 = LSTM engine only.
         return module.createWorker(LANGUAGES, 1, {
-            langPath: LANG_DIR,
-            cachePath: LANG_DIR,
+            langPath: langDir,
+            cachePath: langDir,
             gzip: true,
         });
     })();

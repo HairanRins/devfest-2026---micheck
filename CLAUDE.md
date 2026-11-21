@@ -11,7 +11,9 @@ See also `AGENTS.md` (shared agent instructions) — its rules apply here too.
 - Build: `npm run build`
 - Lint: `npm run lint`
 - Typecheck: `npx tsc --noEmit` (no `typecheck` script)
-- There is no test framework or test script.
+- Tests: `npm test` — Node's built-in runner (`node:test`), no extra dependency. Integration tests in `tests/context-detector/*.test.ts` call the real route handlers with real `NextRequest`s; only `fetch` is mocked (`tests/helpers.ts`), and unexpected hosts fail the test.
+- Single file: `node --no-experimental-strip-types --import ./tests/setup/register.mjs --test tests/context-detector/fallback.test.ts`; single test: add `--test-name-pattern="timeout"`.
+- `tests/setup/loader.mjs` compiles `.ts` with the project's TypeScript (Node's type stripping can't drop type-only imports), resolves `@/` and `next/server`, and swaps `node-llama-cpp` / `tesseract.js` for the fakes in `tests/fixtures/fakes/`. Each test file runs in its own process; provider cooldowns in `ai.ts` are module state, so tests that trigger them go last in their file (`Retry-After: 0` avoids a pause).
 
 Manual API exploration: Swagger UI at `/api/docs`, backed by the spec at `/api/openapi` (built from `lib/openapi.ts`). When adding or changing a route, update `lib/openapi.ts` too.
 

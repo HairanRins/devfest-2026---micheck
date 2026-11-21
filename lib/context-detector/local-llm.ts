@@ -14,7 +14,7 @@ export class LocalModelUnavailableError extends Error {
     readonly code = "LOCAL_MODEL_UNAVAILABLE";
 }
 
-const DEFAULT_MODEL_FILE = "models/qwen2.5-3b-instruct-q4_k_m.gguf";
+const DEFAULT_MODEL_FILE = "local-models/qwen2.5-3b-instruct-q4_k_m.gguf";
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 const CONTEXT_SIZE = 8192;
 const MAX_TOKENS: Record<AiStep, number> = { extraction: 900, analysis: 1600 };

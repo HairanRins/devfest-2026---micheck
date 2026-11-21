@@ -47,7 +47,7 @@ Constraints from `PRODUCT_SCOPE.md`:
    The verdict label is kept. The safeguards in `normalize.ts` still apply: sources come only from search, and a verdict without evidence becomes `unverifiable`.
 5. **Detecting limits:** HTTP 429 pauses that provider for its `Retry-After` time, 60 s by default and 10 min at most. A refused key (401/403) or exhausted credit (402) pauses it for 5 min. While paused, the provider is skipped without a call and recorded as `skipped` in `attempts`.
 6. **No change to startup time:** the npm packages and the model are loaded only on first use, from a module name the bundler can't follow, so they stay out of the bundle. `next.config.ts` lists them in `serverExternalPackages`.
-7. **Optional install:** `npm run models:install` installs the packages, and `npm run models:download` downloads the 2 GB model into `models/` (ignored by git). Without them, the app works normally. The local provider then reports why it's unavailable, with the command to fix it.
+7. **Optional install:** `npm run models:install` installs the packages, and `npm run models:download` downloads the 2 GB model into `local-models/` (ignored by git; `models/` already holds legacy TypeScript files). Without them, the app works normally. The local provider then reports why it's unavailable, with the command to fix it.
 
 ## 4. Consequences
 

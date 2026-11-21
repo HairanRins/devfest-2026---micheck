@@ -7,4 +7,5 @@ out/
 build/
 *.log
 "@ | Out-File -Encoding utf8 .gitignore
-models/
+# Local model weights and OCR data (docs/adr-local-fallback.md)
+local-models/

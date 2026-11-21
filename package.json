@@ -7,8 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "test": "node --no-experimental-strip-types --import ./tests/setup/register.mjs --test \"tests/**/*.test.ts\"",
     "models:install": "npm i node-llama-cpp@3.22.3 tesseract.js@7.0.0 @tesseract.js-data/fra@1.0.0 @tesseract.js-data/eng@1.0.0",
-    "models:download": "curl -L -C - --create-dirs -o models/qwen2.5-3b-instruct-q4_k_m.gguf https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf"
+    "models:download": "curl -L -C - --create-dirs -o local-models/qwen2.5-3b-instruct-q4_k_m.gguf https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf"
   },
   "dependencies": {
     "next": "16.4.6",
