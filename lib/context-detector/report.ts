@@ -97,15 +97,25 @@ export const renderDossierReport = (dossier: Dossier): string => {
     }
 
     if (dossier.media_findings?.length || dossier.video_findings?.length) {
-        sections.push(
-            "",
-            "### Analyse des médias",
-            "",
-            list([
-                ...(dossier.media_findings ?? []).flatMap((finding) => finding.limitations),
-                ...(dossier.video_findings ?? []).flatMap((finding) => finding.limitations),
-            ]),
-        );
+        sections.push("", "### Analyse des médias", "");
+        (dossier.media_findings ?? []).forEach((finding) => {
+            sections.push(`- **${finding.media_id}**`);
+            finding.visual_observations.forEach((observation) => {
+                sections.push(`  - Observation : ${observation}`);
+            });
+            if (finding.ocr) {
+                sections.push(`  - Texte visible : ${finding.ocr}`);
+            }
+            finding.limitations.forEach((limitation) => {
+                sections.push(`  - Limite : ${limitation}`);
+            });
+        });
+        (dossier.video_findings ?? []).forEach((finding) => {
+            sections.push(`- **${finding.media_id}** : ${finding.verified_scope}`);
+            finding.limitations.forEach((limitation) => {
+                sections.push(`  - Limite : ${limitation}`);
+            });
+        });
     }
 
     sections.push("", "### Ce qui reste inconnu", "");

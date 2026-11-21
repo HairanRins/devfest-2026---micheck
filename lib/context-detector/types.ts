@@ -49,6 +49,7 @@ export interface MediaInput {
     type: "image" | "video" | "document";
     url?: string;
     dataUrl?: string;
+    frames?: string[];
     name?: string;
     mimeType?: string;
 }

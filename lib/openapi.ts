@@ -279,7 +279,7 @@ export const openApiDocument = {
                 operationId: "extractContextDetectorClaims",
                 summary: "Décomposer un contenu en affirmations vérifiables",
                 description:
-                    "Première étape du pipeline : ne produit ni preuve ni verdict (1 appel IA, aucune recherche web). Nécessite au moins une clé IA (Groq, xAI, Mistral, Gemini ou Hugging Face) ; les fournisseurs sont essayés en cascade selon CONTEXT_DETECTOR_AI_PROVIDERS. Le résultat n'est pas stocké.",
+                    "Première étape du pipeline : ne produit ni preuve ni verdict (1 appel IA, aucune recherche web). Nécessite au moins une clé IA (Groq, xAI, Mistral, Gemini ou Hugging Face) ; les fournisseurs sont essayés dans l'ordre de CONTEXT_DETECTOR_AI_PROVIDERS, puis tout autre fournisseur doté d'une clé. Le résultat n'est pas stocké.",
                 requestBody: contextDetectorRequestBody,
                 responses: {
                     200: response("Affirmations extraites", ref("ContextDetectorClaimsResponse")),
@@ -296,7 +296,7 @@ export const openApiDocument = {
                 operationId: "runContextDetectorInvestigation",
                 summary: "Lancer une investigation complète et produire un dossier sourcé",
                 description:
-                    "Pipeline : extraction des affirmations > plan de recherche > recherche web (si configurée : Tavily, avec repli Brave ou générique selon CONTEXT_DETECTOR_SEARCH_PROVIDERS) > évaluation des sources, contradictions et chronologie > verdicts nuancés > dossier Markdown. Les fournisseurs IA (Groq, xAI, Mistral, Gemini, Hugging Face) sont essayés en cascade. 2 appels IA + recherche web : compter 10 à 60 s. L'URL, le titre, l'éditeur, l'extrait et les dates de chaque preuve proviennent exclusivement des résultats de recherche réellement récupérés, jamais de l'IA. Un verdict `confirmed`, `refuted`, `partially_confirmed` ou `misleading_or_out_of_context` sans preuve citée est ramené côté serveur à `unverifiable` (confiance `low`). Les URL et médias soumis ne sont pas téléchargés. Le dossier est conservé 30 min en mémoire.",
+                    "Pipeline : extraction des affirmations > plan de recherche > recherche web (si configurée : Tavily, avec repli Brave ou générique selon CONTEXT_DETECTOR_SEARCH_PROVIDERS) > évaluation des sources, contradictions et chronologie > verdicts nuancés > dossier Markdown. Les images envoyées en dataUrl et les images clés vidéo (frames) sont analysées par un modèle vision si configuré ; l'inspection visuelle ne certifie jamais l'authenticité. Les fournisseurs IA (Groq, xAI, Mistral, Gemini, Hugging Face) sont essayés dans l'ordre de CONTEXT_DETECTOR_AI_PROVIDERS, puis tout autre fournisseur doté d'une clé. 2 appels IA + recherche web : compter 10 à 60 s. L'URL, le titre, l'éditeur, l'extrait et les dates de chaque preuve proviennent exclusivement des résultats de recherche réellement récupérés, jamais de l'IA. Un verdict `confirmed`, `refuted`, `partially_confirmed` ou `misleading_or_out_of_context` sans preuve citée est ramené côté serveur à `unverifiable` (confiance `low`). Les URL et médias soumis ne sont pas téléchargés. Le dossier est conservé 30 min en mémoire.",
                 requestBody: contextDetectorRequestBody,
                 responses: {
                     201: response("Dossier de vérification", ref("ContextDetectorInvestigationResponse")),
@@ -328,6 +328,41 @@ export const openApiDocument = {
                 responses: {
                     200: response("Dossier de vérification", ref("ContextDetectorInvestigationResponse")),
                     404: response("Investigation introuvable", ref("Message")),
+                    500: errorResponse(),
+                },
+            },
+        },
+        "/api/context-detector/chat": {
+            post: {
+                tags: ["public", "context-detector"],
+                operationId: "chatWithContextDetector",
+                summary: "Discuter avec l'assistant de vérification",
+                description:
+                    "Assistant conversationnel. Sans investigation_id, il explique la méthode de vérification sans prétendre avoir vérifié un contenu. Avec investigation_id, il s'appuie sur le dossier stocké (30 min), cite ses sources [S1] et ne fabrique jamais d'URL. Cette route ne lance aucune recherche web et ne certifie jamais l'authenticité d'une image.",
+                requestBody: {
+                    required: true,
+                    content: {
+                        "application/json": {
+                            schema: ref("ContextDetectorChatRequest"),
+                            example: {
+                                messages: [
+                                    {
+                                        role: "user",
+                                        content: "Résume ce dossier en trois lignes.",
+                                    },
+                                ],
+                                investigation_id: "3f2b8c1e-7a4d-4e9b-9c55-1d2e3f4a5b6c",
+                                language: "fr",
+                            },
+                        },
+                    },
+                },
+                responses: {
+                    200: response("Réponse de l'assistant", ref("ContextDetectorChatResponse")),
+                    400: response("Requête invalide", ref("Message")),
+                    404: response("Dossier introuvable", ref("Message")),
+                    502: errorResponse("Fournisseur IA indisponible"),
+                    503: errorResponse("IA non configurée"),
                     500: errorResponse(),
                 },
             },
@@ -828,7 +863,18 @@ export const openApiDocument = {
                 properties: {
                     type: { type: "string", enum: ["image", "video", "document"] },
                     url: { type: "string", format: "uri" },
-                    dataUrl: { type: "string", description: "Média encodé en base64" },
+                    dataUrl: {
+                        type: "string",
+                        description:
+                            "Image JPEG, PNG ou WebP en base64 (4 Mo max), analysée par un modèle vision si configuré",
+                    },
+                    frames: {
+                        type: "array",
+                        maxItems: 4,
+                        items: { type: "string" },
+                        description:
+                            "Images clés d'une vidéo fournies par le client (4 max), analysées par le modèle vision",
+                    },
                     name: { type: "string" },
                     mimeType: { type: "string" },
                 },
@@ -1076,6 +1122,58 @@ export const openApiDocument = {
                     investigation_id: { type: "string", format: "uuid" },
                     dossier: ref("ContextDetectorDossier"),
                     report: { type: "string", description: "Dossier Markdown prêt à afficher" },
+                },
+            },
+            ContextDetectorChatMessage: {
+                type: "object",
+                required: ["role", "content"],
+                properties: {
+                    role: { type: "string", enum: ["user", "assistant"] },
+                    content: { type: "string", maxLength: 4000 },
+                },
+            },
+            ContextDetectorChatRequest: {
+                type: "object",
+                required: ["messages"],
+                properties: {
+                    messages: {
+                        type: "array",
+                        maxItems: 20,
+                        items: ref("ContextDetectorChatMessage"),
+                    },
+                    investigation_id: {
+                        type: "string",
+                        description:
+                            "Dossier de référence produit par /investigate (conservé 30 min)",
+                    },
+                    language: { type: "string", example: "fr" },
+                },
+            },
+            ContextDetectorChatResponse: {
+                type: "object",
+                required: ["message", "grounded", "sources"],
+                properties: {
+                    message: { type: "string" },
+                    grounded: {
+                        type: "boolean",
+                        description: "true si la réponse s'appuie sur un dossier",
+                    },
+                    investigation_id: { type: "string", format: "uuid" },
+                    sources: {
+                        type: "array",
+                        items: {
+                            type: "object",
+                            required: ["source_id", "url", "title", "accessed_date"],
+                            properties: {
+                                source_id: { type: "string" },
+                                url: { type: "string", format: "uri" },
+                                title: { type: "string" },
+                                publisher: { type: "string" },
+                                published_date: { type: "string" },
+                                accessed_date: { type: "string", format: "date-time" },
+                            },
+                        },
+                    },
                 },
             },
         },

@@ -40,6 +40,8 @@ Copy `.env.example` to `.env.local` and restart `npm run dev` after any change.
 | `CONTEXT_DETECTOR_AI_API_KEY` | **Yes** for `/claims` and `/investigate`. Without it they return **503**. | none | API key for an OpenAI-compatible model provider. The default provider is Groq; a free key is available at console.groq.com. |
 | `CONTEXT_DETECTOR_AI_BASE_URL` | No | `https://api.groq.com/openai/v1` | Any OpenAI-compatible `/chat/completions` endpoint. The model must support `response_format: json_object`. |
 | `CONTEXT_DETECTOR_AI_MODEL` | No | `llama-3.3-70b-versatile` | Model name. |
+| `CONTEXT_DETECTOR_GROQ_VISION_MODEL` / `_MISTRAL_VISION_MODEL` / `_GEMINI_VISION_MODEL` | No | Groq `llama-4-scout`, Mistral `pixtral`, Gemini `gemini-2.5-flash` | Multimodal model used when an image or video frames are sent. Without it, media analysis is skipped with an explicit limitation. |
+| `CONTEXT_DETECTOR_CHAT_MAX_TOKENS` | No | `1024` | Max output tokens for `/chat`. |
 | `CONTEXT_DETECTOR_SEARCH_PROVIDER` | No | `none` | One of `none`, `brave`, `tavily` or `generic`. With `none`, no web search runs, there is no evidence, and the verdicts are expected to be `unverifiable`. |
 | `CONTEXT_DETECTOR_SEARCH_API_KEY` | Yes when the provider is not `none` | none | Key for Brave (sent as the `X-Subscription-Token` header) or Tavily (sent as `api_key` in the body). The `generic` provider also requires it (audit bug 24). |
 | `CONTEXT_DETECTOR_SEARCH_URL` | Only for `generic` | Brave or Tavily official URL | Custom endpoint. The `generic` provider sends `POST {q, count}` and expects `{results:[{title,url,description\|snippet\|content,…}]}`. |
@@ -80,8 +82,15 @@ The four chat endpoints share the same error format, produced by `lib/context-de
     "type": "text | url | image | video | document | mixed", // optional, detected automatically
     "text": "string, at most 20,000 characters",
     "url": "https://…",            // passed to the AI as text only, never downloaded
-    "media": [                     // at most 10 items; only the metadata is used
-      { "type": "image | video | document", "url": "…", "dataUrl": "…", "name": "…", "mimeType": "…" }
+    "media": [                     // at most 10 items
+      {
+        "type": "image | video | document",
+        "url": "…",
+        "dataUrl": "data:image/jpeg;base64,…", // images only, 4 MB max: analysed by the vision model
+        "frames": ["data:image/jpeg;base64,…"], // video keyframes, 4 max, supplied by the client
+        "name": "…",
+        "mimeType": "…"
+      }
     ]
     // at least one of text, url or media is required
   },
@@ -216,7 +225,23 @@ curl -s http://localhost:3000/api/context-detector/investigations/<investigation
 - **200:** the same body as 4.3.
 - **404:** the id is unknown, the 30 minutes have passed, or the server restarted. In dev, a hot reload also clears the store.
 
-### 4.5 `POST /api/bot/bot_recommandation` (legacy, out of scope)
+### 4.5 `POST /api/context-detector/chat`
+
+Conversational assistant. Without `investigation_id` it explains the verification method and refuses to pretend that a piece of content was checked. With an `investigation_id` from 4.3 it answers from that dossier, cites its sources as `[S1]`, and never invents a URL. It launches no web search.
+
+```bash
+curl -s -X POST http://localhost:3000/api/context-detector/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"messages":[{"role":"user","content":"Résume ce dossier en trois lignes."}],"investigation_id":"<investigation_id>","language":"fr"}'
+```
+
+Response 200: `{ "message": "…", "grounded": true, "investigation_id": "…", "sources": [ … ] }`
+
+- **400:** empty `messages`, unknown role, a message over 4,000 characters, a conversation over 24,000 characters, or a last message that is not `user`.
+- **404:** unknown `investigation_id`, or older than 30 minutes.
+- The AI calls reuse the same provider cascade as `/investigate`.
+
+### 4.6 `POST /api/bot/bot_recommandation` (legacy, out of scope)
 
 This is the chatbot from the old e-commerce shop. It is marked `deprecated` in Swagger and **does not work** in this repository: `@langchain/*` is not installed and `@/data/prompt-data` is missing. It is documented here only for completeness. Example body: `{ "prompt": "Quel produit me conseillez-vous pour un cadeau ?" }`
 
