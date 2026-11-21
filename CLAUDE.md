@@ -36,6 +36,7 @@ Routes (public, under the `(client)` route group — no auth):
 - `GET  /api/context-detector/skills` — skill catalog
 - `POST /api/context-detector/claims` — claim extraction only
 - `POST /api/context-detector/investigate` — full investigation, returns 201
+- `POST /api/context-detector/chat` — conversational assistant, optionally grounded in a stored dossier
 - `GET  /api/context-detector/investigations/[id]` — fetch a stored result
 - `POST /api/context-detector/media-signals` — multipart image (≤ 4 MB, JPEG/PNG/WebP sniffed from bytes) → technical clues (EXIF, provenance markers); no AI call, never feeds the verdict (`lib/context-detector/media.ts`, see `docs/adr-content-detector.md`)
 
@@ -45,9 +46,10 @@ Pipeline in `lib/context-detector/orchestrator.ts` (`runInvestigation`):
 1. `skills.ts` detects input type and selects relevant skills (web search skills only if a search provider is configured).
 2. First LLM call (`requestStructuredJson` in `ai.ts`) with the extraction prompt from `prompts.ts` → claims + search plan.
 3. Up to 6 deduplicated queries go to `search.ts` (`CONTEXT_DETECTOR_SEARCH_PROVIDER` = `none` | `generic` | `brave` | `tavily`).
-4. Results become an evidence packet; second LLM call produces analysis + verdicts.
-5. Everything is passed through `normalize.ts` (LLM output is never trusted raw), assembled into a `Dossier`, optionally rendered to Markdown by `report.ts`.
-6. Saved in `store.ts` — an **in-memory Map with 30-min TTL** (lost on restart, not shared across instances).
+4. Results become an evidence packet. If media is present, `media.ts` sends image `dataUrl`s and client-supplied video `frames` to a vision model; those observations are added to the analysis input and merged into `media_findings`, always framed as observations that prove neither authenticity nor manipulation.
+5. Second LLM call produces analysis + verdicts.
+6. Everything is passed through `normalize.ts` (LLM output is never trusted raw), assembled into a `Dossier`, optionally rendered to Markdown by `report.ts`.
+7. Saved in `store.ts` — an **in-memory Map with 30-min TTL** (lost on restart, not shared across instances). `chat.ts` reads it to ground `/chat`.
 
 `ai.ts` is a fallback chain (`requestStructuredJson(system, user, step)` → `{ data, provider }`): remote providers in `CONTEXT_DETECTOR_AI_PROVIDERS` order (Groq, xAI, Mistral, Gemini, HF via plain `fetch`, no SDK), with a cooldown after 429/401/402/403, then an opt-in local model (`local-llm.ts`, Qwen2.5-3B via `node-llama-cpp`, `CONTEXT_DETECTOR_LOCAL_FALLBACK=on`). Every response carries `generated_by` (who answered, prior `attempts`); local results set `indicative: true` and `applyIndicativeMode` caps confidence at `low`. `ocr.ts` (`tesseract.js`) serves `media-signals?ocr=true`. The local packages are **optional**: loaded via a non-analysable dynamic import, listed in `serverExternalPackages`, installed with `npm run models:install` + `npm run models:download` — see `docs/adr-local-fallback.md`. Don't import them statically.
 

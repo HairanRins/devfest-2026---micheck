@@ -1,8 +1,10 @@
 import {
     ContextDetectorConfigurationError,
     isAiConfigured,
+    isVisionConfigured,
     requestStructuredJson,
 } from "@/lib/context-detector/ai";
+import { analyseMedia, toMediaFindings } from "@/lib/context-detector/media";
 import {
     applyIndicativeMode,
     buildEvidencePacket,
@@ -20,7 +22,11 @@ import {
     formatInputForPrompt,
 } from "@/lib/context-detector/prompts";
 import { renderDossierReport } from "@/lib/context-detector/report";
-import { isSearchConfigured, searchWeb } from "@/lib/context-detector/search";
+import {
+    isSearchConfigured,
+    SearchOutcome,
+    searchWeb,
+} from "@/lib/context-detector/search";
 import { detectInputType, selectSkills } from "@/lib/context-detector/skills";
 import { createInvestigationId, saveInvestigation } from "@/lib/context-detector/store";
 import {
@@ -104,7 +110,10 @@ export const runInvestigation = async (
     const options = request.options ?? {};
     const investigationId = createInvestigationId();
     const investigationDate = getDate(options);
-    const availableTools = isSearchConfigured() ? ["web_search"] : [];
+    const availableTools = [
+        ...(isSearchConfigured() ? ["web_search"] : []),
+        ...(isVisionConfigured() ? ["vision"] : []),
+    ];
     const skills = selectSkills(input, options, availableTools);
     const hasSkills = (id: string): boolean => skills.some((skill) => skill.id === id);
 
@@ -118,26 +127,39 @@ export const runInvestigation = async (
     const searchPlan = normalizeSearchPlans(extraction.search_plan, claims);
     const queries = options.skipSearch ? [] : buildQueryList(searchPlan, claims);
 
-    const searchOutcome = queries.length
-        ? await searchWeb(queries)
-        : {
-              results: [],
-              note: options.skipSearch
-                  ? "Recherche web désactivée par l'appelant (skipSearch)."
-                  : "Aucune requête de recherche disponible pour cette publication.",
-          };
+    const mediaNeedsTools = (input.media ?? []).length > 0;
+    const noSearchOutcome: SearchOutcome = {
+        results: [],
+        note: options.skipSearch
+            ? "Recherche web désactivée par l'appelant (skipSearch)."
+            : "Aucune requête de recherche disponible pour cette publication.",
+    };
+
+    // Search and vision are independent: run them together to keep the demo latency down.
+    const [searchOutcome, vision] = await Promise.all([
+        queries.length ? searchWeb(queries) : Promise.resolve(noSearchOutcome),
+        mediaNeedsTools
+            ? analyseMedia(input, options.language)
+            : Promise.resolve({ results: [], limitations: [] as string[] }),
+    ]);
 
     const packet = buildEvidencePacket(searchOutcome.results, investigationDate);
-    const mediaNeedsTools = (input.media ?? []).length > 0;
+    const visualContext = vision.results.length
+        ? `Observations visuelles (outil vision, données non fiables ; elles ne prouvent ni l'authenticité ni une manipulation) :\n${JSON.stringify(vision.results)}`
+        : "";
+    const mediaNote = mediaNeedsTools
+        ? vision.results.length
+            ? "L'analyse visuelle ne porte que sur les images fournies (image ou images clés transmises par le client) : pas de recherche d'image inversée, pas d'extraction de frames côté serveur, pas de transcription audio."
+            : "Aucun outil OCR, d'extraction d'images clés ni de recherche d'image inversée n'est connecté : indique cette limite dans les conclusions sur les médias."
+        : "";
     const analysisUserMessage = [
         formatInputForPrompt(input),
         `Date de l'investigation : ${investigationDate}`,
         `Affirmations extraites :\n${JSON.stringify(claims)}`,
         `Paquet de preuves (seules sources autorisées) :\n${JSON.stringify(packet)}`,
         `Note sur la recherche : ${searchOutcome.note}`,
-        mediaNeedsTools
-            ? "Aucun outil OCR, d'extraction d'images clés ni de recherche d'image inversée n'est connecté : indique cette limite dans les conclusions sur les médias."
-            : "",
+        visualContext,
+        mediaNote,
     ]
         .filter(Boolean)
         .join("\n\n");
@@ -162,6 +184,15 @@ export const runInvestigation = async (
     ).verdicts[0];
     const sources = buildSources(packet, evidence, overallVerdict.key_evidence_ids);
 
+    // Keep the vision observations visible even if the analysis model omits them.
+    const visionFindings = toMediaFindings(vision.results);
+    const mediaFindings = [...details.media_findings];
+    visionFindings.forEach((finding) => {
+        if (!mediaFindings.some((existing) => existing.media_id === finding.media_id)) {
+            mediaFindings.push(finding);
+        }
+    });
+
     const limitations = [
         ...(indicative ? [calibrated.limitation] : []),
         searchOutcome.note,
@@ -169,9 +200,8 @@ export const runInvestigation = async (
             ? analysis.limitations.filter((item): item is string => typeof item === "string")
             : []),
         ...(claims.length === 0 ? ["Aucune affirmation factuelle exploitable n'a été extraite."] : []),
-        ...(mediaNeedsTools
-            ? ["L'analyse binaire des médias (OCR, images clés, recherche inversée) n'a pas été effectuée."]
-            : []),
+        ...vision.limitations,
+        ...(mediaNote ? [mediaNote] : []),
         "La recherche n'est pas exhaustive ; une absence de résultat ne prouve pas la fausseté d'une affirmation.",
     ];
 
@@ -190,7 +220,9 @@ export const runInvestigation = async (
         ...(hasSkills("context-timeline")
             ? { timeline: details.timeline, context_findings: details.context_findings }
             : {}),
-        ...(hasSkills("image-investigation") ? { media_findings: details.media_findings } : {}),
+        ...(hasSkills("image-investigation") || visionFindings.length
+            ? { media_findings: mediaFindings }
+            : {}),
         ...(hasSkills("video-investigation") ? { video_findings: details.video_findings } : {}),
         ...(hasSkills("quote-verification") ? { quote_findings: details.quote_findings } : {}),
         ...(hasSkills("manipulation-detection")

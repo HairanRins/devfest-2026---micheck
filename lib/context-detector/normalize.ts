@@ -1,4 +1,10 @@
 import {
+    dataUrlByteSize,
+    isSupportedImageDataUrl,
+    MAX_IMAGE_BYTES,
+    MAX_VIDEO_FRAMES,
+} from "@/lib/context-detector/image-data";
+import {
     Checkability,
     Claim,
     ClaimType,
@@ -100,18 +106,52 @@ const asEnum = <T extends string>(value: unknown, allowed: readonly T[], fallbac
         ? (value as T)
         : fallback;
 
+const validateImageDataUrl = (value: string, label: string): string => {
+    if (!isSupportedImageDataUrl(value)) {
+        throw new ContextDetectorValidationError(
+            `${label} doit être une image JPEG, PNG ou WebP encodée en base64.`,
+        );
+    }
+    if (dataUrlByteSize(value) > MAX_IMAGE_BYTES) {
+        throw new ContextDetectorValidationError(
+            `${label} dépasse ${MAX_IMAGE_BYTES / (1024 * 1024)} Mo.`,
+        );
+    }
+    return value;
+};
+
 const parseMedia = (value: unknown): MediaInput[] => {
     if (!Array.isArray(value)) {
         return [];
     }
 
-    return value.slice(0, MAX_MEDIA).map((item) => {
+    return value.slice(0, MAX_MEDIA).map((item, index) => {
         const media = asRecord(item);
         const type = asEnum(media.type, ["image", "video", "document"] as const, "image");
+        const rawDataUrl = asOptionalString(media.dataUrl);
+        const dataUrl = rawDataUrl
+            ? validateImageDataUrl(rawDataUrl, `media[${index}].dataUrl`)
+            : undefined;
+        const frames = (Array.isArray(media.frames) ? media.frames : [])
+            .slice(0, MAX_VIDEO_FRAMES)
+            .map((frame, frameIndex) => {
+                const rawFrame = asOptionalString(frame);
+                if (!rawFrame) {
+                    throw new ContextDetectorValidationError(
+                        `media[${index}].frames[${frameIndex}] est vide.`,
+                    );
+                }
+                return validateImageDataUrl(
+                    rawFrame,
+                    `media[${index}].frames[${frameIndex}]`,
+                );
+            });
+
         return {
             type,
             url: asOptionalString(media.url),
-            dataUrl: asOptionalString(media.dataUrl),
+            dataUrl,
+            ...(frames.length ? { frames } : {}),
             name: asOptionalString(media.name),
             mimeType: asOptionalString(media.mimeType),
         };
