@@ -8,12 +8,12 @@ Sources: `PRODUCT_SCOPE.md` (hackathon scope), `docs/audit-api.md` (step 1 audit
 
 **Recommendation: keep what is already there.** The spec is a hand-written OpenAPI object in `lib/openapi.ts`. `GET /api/openapi` serves it, and `GET /api/docs` loads Swagger UI from a CDN. This adds no npm dependency.
 
-| Option | Setup cost | Fit for this repo |
-|---|---|---|
-| **Hand-written spec + Swagger UI from CDN (current)** | None, it already works | ✅ Simplest choice for App Router route handlers. No build step and nothing new to install, which suits a 24 h hackathon (PRODUCT_SCOPE §4). The drawback is that the spec must be updated by hand when a route changes. |
-| `next-swagger-doc` | 1 dependency, plus JSDoc `@swagger` comments on each route | Still hand-written YAML, only moved into comments. Nothing gained here. |
-| `@asteasolutions/zod-to-openapi` | Adds `zod`, and the validation code must be rewritten | Generates the spec from the same schemas that validate requests. A good choice **after** the hackathon, alongside replacing `validateInvestigationRequest`. |
-| `swagger-ui-react` | 1 large dependency and a client page | No benefit over the CDN version. |
+| Option                                                | Setup cost                                                 | Fit for this repo                                                                                                                                                                                                        |
+| ----------------------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Hand-written spec + Swagger UI from CDN (current)** | None, it already works                                     | ✅ Simplest choice for App Router route handlers. No build step and nothing new to install, which suits a 24 h hackathon (PRODUCT_SCOPE §4). The drawback is that the spec must be updated by hand when a route changes. |
+| `next-swagger-doc`                                    | 1 dependency, plus JSDoc `@swagger` comments on each route | Still hand-written YAML, only moved into comments. Nothing gained here.                                                                                                                                                  |
+| `@asteasolutions/zod-to-openapi`                      | Adds `zod`, and the validation code must be rewritten      | Generates the spec from the same schemas that validate requests. A good choice **after** the hackathon, alongside replacing `validateInvestigationRequest`.                                                              |
+| `swagger-ui-react`                                    | 1 large dependency and a client page                       | No benefit over the CDN version.                                                                                                                                                                                         |
 
 Changes made in this step:
 
@@ -35,14 +35,16 @@ Open the UI with `npm run dev`, then go to <http://localhost:3000/api/docs>. The
 
 Copy `.env.example` to `.env.local` and restart `npm run dev` after any change.
 
-| Variable | Required? | Default | Purpose |
-|---|---|---|---|
-| `CONTEXT_DETECTOR_AI_API_KEY` | **Yes** for `/claims` and `/investigate`. Without it they return **503**. | none | API key for an OpenAI-compatible model provider. The default provider is Groq; a free key is available at console.groq.com. |
-| `CONTEXT_DETECTOR_AI_BASE_URL` | No | `https://api.groq.com/openai/v1` | Any OpenAI-compatible `/chat/completions` endpoint. The model must support `response_format: json_object`. |
-| `CONTEXT_DETECTOR_AI_MODEL` | No | `llama-3.3-70b-versatile` | Model name. |
-| `CONTEXT_DETECTOR_SEARCH_PROVIDER` | No | `none` | One of `none`, `brave`, `tavily` or `generic`. With `none`, no web search runs, there is no evidence, and the verdicts are expected to be `unverifiable`. |
-| `CONTEXT_DETECTOR_SEARCH_API_KEY` | Yes when the provider is not `none` | none | Key for Brave (sent as the `X-Subscription-Token` header) or Tavily (sent as `api_key` in the body). The `generic` provider also requires it (audit bug 24). |
-| `CONTEXT_DETECTOR_SEARCH_URL` | Only for `generic` | Brave or Tavily official URL | Custom endpoint. The `generic` provider sends `POST {q, count}` and expects `{results:[{title,url,description\|snippet\|content,…}]}`. |
+| Variable                                                                                | Required?                                                                 | Default                                                            | Purpose                                                                                                                                                      |
+| --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `CONTEXT_DETECTOR_AI_API_KEY`                                                           | **Yes** for `/claims` and `/investigate`. Without it they return **503**. | none                                                               | API key for an OpenAI-compatible model provider. The default provider is Groq; a free key is available at console.groq.com.                                  |
+| `CONTEXT_DETECTOR_AI_BASE_URL`                                                          | No                                                                        | `https://api.groq.com/openai/v1`                                   | Any OpenAI-compatible `/chat/completions` endpoint. The model must support `response_format: json_object`.                                                   |
+| `CONTEXT_DETECTOR_AI_MODEL`                                                             | No                                                                        | `llama-3.3-70b-versatile`                                          | Model name.                                                                                                                                                  |
+| `CONTEXT_DETECTOR_GROQ_VISION_MODEL` / `_MISTRAL_VISION_MODEL` / `_GEMINI_VISION_MODEL` | No                                                                        | Groq `llama-4-scout`, Mistral `pixtral`, Gemini `gemini-2.5-flash` | Multimodal model used when an image or video frames are sent. Without it, media analysis is skipped with an explicit limitation.                             |
+| `CONTEXT_DETECTOR_CHAT_MAX_TOKENS`                                                      | No                                                                        | `1024`                                                             | Max output tokens for `/chat`.                                                                                                                               |
+| `CONTEXT_DETECTOR_SEARCH_PROVIDER`                                                      | No                                                                        | `none`                                                             | One of `none`, `brave`, `tavily` or `generic`. With `none`, no web search runs, there is no evidence, and the verdicts are expected to be `unverifiable`.    |
+| `CONTEXT_DETECTOR_SEARCH_API_KEY`                                                       | Yes when the provider is not `none`                                       | none                                                               | Key for Brave (sent as the `X-Subscription-Token` header) or Tavily (sent as `api_key` in the body). The `generic` provider also requires it (audit bug 24). |
+| `CONTEXT_DETECTOR_SEARCH_URL`                                                           | Only for `generic`                                                        | Brave or Tavily official URL                                       | Custom endpoint. The `generic` provider sends `POST {q, count}` and expects `{results:[{title,url,description\|snippet\|content,…}]}`.                       |
 
 **Minimum to test:** set only `CONTEXT_DETECTOR_AI_API_KEY`. The pipeline then runs without evidence.
 
@@ -50,26 +52,26 @@ Copy `.env.example` to `.env.local` and restart `npm run dev` after any change.
 
 ### HTTP
 
-| Item | Value |
-|---|---|
-| Authentication | **None.** All chat endpoints are public. The scope document (PRODUCT_SCOPE §8) asks for rate limiting before any public deployment; see audit bug 2. |
-| Request header | `Content-Type: application/json` for the POST endpoints. |
-| Response | Always `application/json`. |
-| Body size | No server-side limit, so avoid sending large `dataUrl` values. Media content is never analysed anyway. |
-| Duration | `/claims` makes 1 AI call and takes about 2–10 s. `/investigate` makes 2 AI calls plus a search and takes about 10–60 s; the worst case is around 140 s. |
-| Language | Prompts, the report and the error messages are in French. Set `options.language` to choose the answer language. |
+| Item           | Value                                                                                                                                                    |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Authentication | **None.** All chat endpoints are public. The scope document (PRODUCT_SCOPE §8) asks for rate limiting before any public deployment; see audit bug 2.     |
+| Request header | `Content-Type: application/json` for the POST endpoints.                                                                                                 |
+| Response       | Always `application/json`.                                                                                                                               |
+| Body size      | No server-side limit, so avoid sending large `dataUrl` values. Media content is never analysed anyway.                                                   |
+| Duration       | `/claims` makes 1 AI call and takes about 2–10 s. `/investigate` makes 2 AI calls plus a search and takes about 10–60 s; the worst case is around 140 s. |
+| Language       | Prompts, the report and the error messages are in French. Set `options.language` to choose the answer language.                                          |
 
 ### Error format
 
 The four chat endpoints share the same error format, produced by `lib/context-detector/http.ts`:
 
-| Status | When | Body |
-|---|---|---|
-| 400 | Empty content, invalid JSON, or `text` longer than 20,000 characters | `{ "message": "…" }` |
-| 404 | `investigations/{id}` is unknown or has expired | `{ "message": "Aucune investigation trouvée avec l'id: …" }` |
-| 502 | The model provider is unreachable, returned an error status, or replied without valid JSON | `{ "message": "…", "error"?: "…" }` (`error` only in development) |
-| 503 | `CONTEXT_DETECTOR_AI_API_KEY` is missing | same as 502 |
-| 500 | Any other error | `{ "message": "Internal Server Error", "error"?: "…" }` |
+| Status | When                                                                                       | Body                                                              |
+| ------ | ------------------------------------------------------------------------------------------ | ----------------------------------------------------------------- |
+| 400    | Empty content, invalid JSON, or `text` longer than 20,000 characters                       | `{ "message": "…" }`                                              |
+| 404    | `investigations/{id}` is unknown or has expired                                            | `{ "message": "Aucune investigation trouvée avec l'id: …" }`      |
+| 502    | The model provider is unreachable, returned an error status, or replied without valid JSON | `{ "message": "…", "error"?: "…" }` (`error` only in development) |
+| 503    | `CONTEXT_DETECTOR_AI_API_KEY` is missing                                                   | same as 502                                                       |
+| 500    | Any other error                                                                            | `{ "message": "Internal Server Error", "error"?: "…" }`           |
 
 ## 3. Request format (`/claims` and `/investigate`)
 
@@ -79,19 +81,28 @@ The four chat endpoints share the same error format, produced by `lib/context-de
   "content": {
     "type": "text | url | image | video | document | mixed", // optional, detected automatically
     "text": "string, at most 20,000 characters",
-    "url": "https://…",            // passed to the AI as text only, never downloaded
-    "media": [                     // at most 10 items; only the metadata is used
-      { "type": "image | video | document", "url": "…", "dataUrl": "…", "name": "…", "mimeType": "…" }
-    ]
+    "url": "https://…", // passed to the AI as text only, never downloaded
+    "media": [
+      // at most 10 items
+      {
+        "type": "image | video | document",
+        "url": "…",
+        "dataUrl": "data:image/jpeg;base64,…", // images only, 4 MB max: analysed by the vision model
+        "frames": ["data:image/jpeg;base64,…"], // video keyframes, 4 max, supplied by the client
+        "name": "…",
+        "mimeType": "…",
+      },
+    ],
     // at least one of text, url or media is required
   },
-  "options": {                     // all optional
-    "language": "fr",              // keep it to a short code (audit bug 6)
-    "skipSearch": false,           // true skips the web search, for a fast test
-    "includeReport": true,         // false leaves out the Markdown `report` field
+  "options": {
+    // all optional
+    "language": "fr", // keep it to a short code (audit bug 6)
+    "skipSearch": false, // true skips the web search, for a fast test
+    "includeReport": true, // false leaves out the Markdown `report` field
     "investigationDate": "2026-11-21T10:00:00Z", // any date Date.parse accepts; defaults to now
-    "skills": ["claim-extraction", "…"]          // filters the pipeline; never send [] (audit bug 14)
-  }
+    "skills": ["claim-extraction", "…"], // filters the pipeline; never send [] (audit bug 14)
+  },
 }
 ```
 
@@ -117,15 +128,15 @@ Splits content into claims that can be checked. It makes 1 AI call, returns no e
 
 The Swagger examples, all available for both `/claims` and `/investigate`:
 
-| Example | What it tests | Expected result |
-|---|---|---|
-| `texte_simple` | `content` sent as a plain string | 200 |
-| `scenario_1_fausse_loi` | Demo 1 (viral fake law) | Several claims of type `policy_legal` |
-| `scenario_2_video_recyclee` | Demo 2 (text plus a video) | `input_type: "mixed"` |
-| `scenario_3_image_sans_source` | Demo 3 (image with no source) | `input_type: "mixed"` |
-| `url_publication` | A shared link | `input_type: "url"` |
-| `sans_recherche_web` | A precise factual claim | 200 |
-| `erreur_400_contenu_vide` | Validation | **400** "Le contenu soumis est vide." |
+| Example                        | What it tests                    | Expected result                       |
+| ------------------------------ | -------------------------------- | ------------------------------------- |
+| `texte_simple`                 | `content` sent as a plain string | 200                                   |
+| `scenario_1_fausse_loi`        | Demo 1 (viral fake law)          | Several claims of type `policy_legal` |
+| `scenario_2_video_recyclee`    | Demo 2 (text plus a video)       | `input_type: "mixed"`                 |
+| `scenario_3_image_sans_source` | Demo 3 (image with no source)    | `input_type: "mixed"`                 |
+| `url_publication`              | A shared link                    | `input_type: "url"`                   |
+| `sans_recherche_web`           | A precise factual claim          | 200                                   |
+| `erreur_400_contenu_vide`      | Validation                       | **400** "Le contenu soumis est vide." |
 
 ```bash
 curl -s -X POST http://localhost:3000/api/context-detector/claims \
@@ -220,14 +231,15 @@ curl -s http://localhost:3000/api/context-detector/investigations/<investigation
 
 Reads technical clues from one image (PRODUCT_SCOPE P1 #5, ADR-001 §3). It makes **no AI call** and costs nothing. The file is analysed in memory and never stored. The signals are clues only: they are never a verdict and are not sent to `/investigate`.
 
-| Item | Value |
-|---|---|
-| Request | `multipart/form-data` with one field, `file` |
+| Item             | Value                                                                             |
+| ---------------- | --------------------------------------------------------------------------------- |
+| Request          | `multipart/form-data` with one field, `file`                                      |
 | Accepted formats | JPEG, PNG, WebP, checked on the file's **content**, not its name or declared type |
-| Size limit | 4 MB per file, 1 file per request |
-| Not returned | GPS coordinates (only `gps_present: true/false`) |
+| Size limit       | 4 MB per file, 1 file per request                                                 |
+| Not returned     | GPS coordinates (only `gps_present: true/false`)                                  |
 
 **In Swagger UI:** open the endpoint, choose a file in the `file` field, then click **Execute**. Good test files:
+
 - a photo straight from a phone camera, which has EXIF data
 - a screenshot or an image downloaded from a social network, which usually has none
 - a `.gif` file, which should return 415
@@ -243,44 +255,56 @@ Response 200:
 {
   "file_name": "photo.jpg",
   "size_bytes": 2483112,
-  "mime_type_declared": "image/jpeg",      // what the client said (not trusted)
-  "mime_type_detected": "image/jpeg",      // what the bytes are
-  "width": 4032, "height": 3024,
-  "exif": { "make": "Nikon", "model": "D750", "date_time_original": "2021:03:14 09:26:53", "gps_present": true },  // or null
-  "provenance_markers": [],                // "c2pa" | "iptc_ai_source" | "generation_parameters"
-  "signals": [ { "code": "camera_declared", "category": "metadata", "message": "Appareil déclaré dans l'EXIF : …" } ],
+  "mime_type_declared": "image/jpeg", // what the client said (not trusted)
+  "mime_type_detected": "image/jpeg", // what the bytes are
+  "width": 4032,
+  "height": 3024,
+  "exif": {
+    "make": "Nikon",
+    "model": "D750",
+    "date_time_original": "2021:03:14 09:26:53",
+    "gps_present": true,
+  }, // or null
+  "provenance_markers": [], // "c2pa" | "iptc_ai_source" | "generation_parameters"
+  "signals": [
+    {
+      "code": "camera_declared",
+      "category": "metadata",
+      "message": "Appareil déclaré dans l'EXIF : …",
+    },
+  ],
   "analyzed_at": "2026-11-21T10:00:00.000Z",
-  "disclaimer": "Ces signaux ne prouvent pas l'authenticité : …"
+  "disclaimer": "Ces signaux ne prouvent pas l'authenticité : …",
 }
 ```
 
-| Signal `code` | Category | Triggered when |
-|---|---|---|
-| `mime_mismatch` | format | The declared type differs from the real format |
-| `extension_mismatch` | format | The file extension differs from the real format |
-| `low_resolution` | format | The longest side is under 400 px |
-| `no_exif` | metadata | No EXIF data (common after social networks strip it, so it proves nothing) |
-| `exif_unreadable` | metadata | An EXIF block exists but can't be read |
-| `camera_declared` | metadata | EXIF names a camera make or model |
-| `capture_date_declared` | metadata | EXIF contains a capture date |
-| `software_declared` | metadata | EXIF names a software (export or editing) |
-| `gps_present` | privacy | GPS data is present (coordinates are not returned) |
-| `c2pa_manifest` | provenance | A C2PA / Content Credentials manifest is present (its signature is **not** verified) |
-| `iptc_ai_source_declared` | provenance | XMP metadata declares IPTC `DigitalSourceType` = AI-generated |
-| `generation_parameters` | provenance | The PNG has text fields that image generators write (`parameters`, `prompt`, `workflow`, …) |
+| Signal `code`             | Category   | Triggered when                                                                              |
+| ------------------------- | ---------- | ------------------------------------------------------------------------------------------- |
+| `mime_mismatch`           | format     | The declared type differs from the real format                                              |
+| `extension_mismatch`      | format     | The file extension differs from the real format                                             |
+| `low_resolution`          | format     | The longest side is under 400 px                                                            |
+| `no_exif`                 | metadata   | No EXIF data (common after social networks strip it, so it proves nothing)                  |
+| `exif_unreadable`         | metadata   | An EXIF block exists but can't be read                                                      |
+| `camera_declared`         | metadata   | EXIF names a camera make or model                                                           |
+| `capture_date_declared`   | metadata   | EXIF contains a capture date                                                                |
+| `software_declared`       | metadata   | EXIF names a software (export or editing)                                                   |
+| `gps_present`             | privacy    | GPS data is present (coordinates are not returned)                                          |
+| `c2pa_manifest`           | provenance | A C2PA / Content Credentials manifest is present (its signature is **not** verified)        |
+| `iptc_ai_source_declared` | provenance | XMP metadata declares IPTC `DigitalSourceType` = AI-generated                               |
+| `generation_parameters`   | provenance | The PNG has text fields that image generators write (`parameters`, `prompt`, `workflow`, …) |
 
 Errors use the format `{ "message": "…", "code": "…" }`:
 
-| Status | `code` | When |
-|---|---|---|
-| 400 | `INVALID_MULTIPART` | The multipart body can't be parsed |
-| 400 | `FILE_REQUIRED` | No `file` field, or `file` is text rather than a file |
-| 400 | `TOO_MANY_FILES` | More than one `file` |
-| 400 | `EMPTY_FILE` | The file has 0 bytes |
-| 413 | `FILE_TOO_LARGE` | Over 4 MB. When `Content-Length` announces it, the body is rejected **before** it is read. |
-| 415 | `MULTIPART_REQUIRED` | The request is not `multipart/form-data` |
-| 415 | `UNSUPPORTED_MEDIA_TYPE` | The real content is not JPEG, PNG or WebP (for example a GIF renamed `.png`) |
-| 422 | `UNREADABLE_IMAGE` | The image is truncated or damaged, so its dimensions can't be read |
+| Status | `code`                   | When                                                                                       |
+| ------ | ------------------------ | ------------------------------------------------------------------------------------------ |
+| 400    | `INVALID_MULTIPART`      | The multipart body can't be parsed                                                         |
+| 400    | `FILE_REQUIRED`          | No `file` field, or `file` is text rather than a file                                      |
+| 400    | `TOO_MANY_FILES`         | More than one `file`                                                                       |
+| 400    | `EMPTY_FILE`             | The file has 0 bytes                                                                       |
+| 413    | `FILE_TOO_LARGE`         | Over 4 MB. When `Content-Length` announces it, the body is rejected **before** it is read. |
+| 415    | `MULTIPART_REQUIRED`     | The request is not `multipart/form-data`                                                   |
+| 415    | `UNSUPPORTED_MEDIA_TYPE` | The real content is not JPEG, PNG or WebP (for example a GIF renamed `.png`)               |
+| 422    | `UNREADABLE_IMAGE`       | The image is truncated or damaged, so its dimensions can't be read                         |
 
 **Using it with `/investigate` (ADR-001 §3):** the UI sends the image to `/media-signals` and the text to `/investigate` **in parallel**. It passes only the file's `name` and `mimeType` in `content.media[]`. The signals are shown in their own block of the result card.
 
@@ -306,14 +330,14 @@ Based on the success criteria in PRODUCT_SCOPE §6.
 
 These are things to keep in mind during testing and the demo.
 
-| PRODUCT_SCOPE says | Reality in the code | Reference |
-|---|---|---|
-| §2 "no invented citation" | ✅ **Fixed.** `url`, `title`, `publisher`, `excerpt`, `published_date` and `accessed_date` always come from the search results. The AI only chooses `claim_ids`, `stance`, `relevance`, `source_type` and `retrieval_notes`. | audit bug 4, `normalizeEvidence` |
+| PRODUCT_SCOPE says                                   | Reality in the code                                                                                                                                                                                                                                                  | Reference                                                           |
+| ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| §2 "no invented citation"                            | ✅ **Fixed.** `url`, `title`, `publisher`, `excerpt`, `published_date` and `accessed_date` always come from the search results. The AI only chooses `claim_ids`, `stance`, `relevance`, `source_type` and `retrieval_notes`.                                         | audit bug 4, `normalizeEvidence`                                    |
 | §2 "Without evidence, the verdict is `unverifiable`" | ✅ **Fixed.** The server now enforces it. `confirmed`, `refuted`, `partially_confirmed` and `misleading_or_out_of_context` with no valid `evidence_ids` become `unverifiable`/`low`, with a limitation explaining why. The same rule applies to the overall verdict. | audit bug 5, `normalizeClaimVerdicts` and `normalizeOverallVerdict` |
-| §6 "Scenarios under one minute" | Not guaranteed: up to 2×60 s of AI calls plus 20 s of search, with no overall timeout. | audit bug 10 |
-| §3 P0 #2 Google Fact Check Tools | Not implemented. There is no `GOOGLE_FACTCHECK_API_KEY` variable yet. | — |
-| §3 P1 #5 media signals (EXIF, MIME, dimensions) | ✅ **Implemented** as `POST /api/context-detector/media-signals`, with no AI call and kept separate from the verdict. | ADR-001, §4.5 |
-| §5 scenario 2 "first publication found" | Possible only if search returns old results. The video itself is never analysed. | — |
-| §8 rate limiting before public deployment | Not implemented. | audit bug 2 |
+| §6 "Scenarios under one minute"                      | Not guaranteed: up to 2×60 s of AI calls plus 20 s of search, with no overall timeout.                                                                                                                                                                               | audit bug 10                                                        |
+| §3 P0 #2 Google Fact Check Tools                     | Not implemented. There is no `GOOGLE_FACTCHECK_API_KEY` variable yet.                                                                                                                                                                                                | —                                                                   |
+| §3 P1 #5 media signals (EXIF, MIME, dimensions)      | ✅ **Implemented** as `POST /api/context-detector/media-signals`, with no AI call and kept separate from the verdict.                                                                                                                                                | ADR-001, §4.5                                                       |
+| §5 scenario 2 "first publication found"              | Possible only if search returns old results. The video itself is never analysed.                                                                                                                                                                                     | —                                                                   |
+| §8 rate limiting before public deployment            | Not implemented.                                                                                                                                                                                                                                                     | audit bug 2                                                         |
 
 The first two rows were the ones that mattered for the judges (PRODUCT_SCOPE §6: "No invented URL or date"). Both are fixed in `lib/context-detector/normalize.ts`.

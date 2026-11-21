@@ -21,7 +21,7 @@
 - 4 endpoints : `POST /api/context-detector/claims`, `POST /api/context-detector/investigate`, `GET /api/context-detector/skills`, `GET /api/context-detector/investigations/{id}`.
 - Documentation Swagger `/api/docs`, spec `/api/openapi`.
 - Garde-fou important : les URL citées sont construites côté serveur à partir des résultats de recherche **réellement récupérés**, donc pas de citation inventée. Sans preuve, le verdict est `unverifiable`.
-- Configuration : clés IA par fournisseur (`GROQ`, `XAI`, `MISTRAL`, `GEMINI`, `HF`) essayées en cascade via `CONTEXT_DETECTOR_AI_PROVIDERS` ; recherche via `CONTEXT_DETECTOR_SEARCH_PROVIDERS` (Tavily en premier, repli Brave/générique). Voir `.env.example` (sans secrets).
+- Configuration : clés IA par fournisseur (`GROQ`, `XAI`, `MISTRAL`, `GEMINI`, `HF`) essayées dans l'ordre de `CONTEXT_DETECTOR_AI_PROVIDERS`, puis tout fournisseur doté d'une clé ; recherche via `CONTEXT_DETECTOR_SEARCH_PROVIDERS` (Tavily en premier, repli Brave/générique). Voir `.env.example` (sans secrets).
 
 **Ce que ce n'est pas :** pas d'OCR réel, pas de recherche d'image inversée, pas d'analyse de vidéo/images clés, pas de modèle de détection de deepfake, pas de base de données persistante.
 

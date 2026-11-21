@@ -34,6 +34,7 @@ Routes (public, under the `(client)` route group — no auth):
 - `GET  /api/context-detector/skills` — skill catalog
 - `POST /api/context-detector/claims` — claim extraction only
 - `POST /api/context-detector/investigate` — full investigation, returns 201
+- `POST /api/context-detector/chat` — conversational assistant, optionally grounded in a stored dossier
 - `GET  /api/context-detector/investigations/[id]` — fetch a stored result
 - `POST /api/context-detector/media-signals` — multipart image (≤ 4 MB, JPEG/PNG/WebP sniffed from bytes) → technical clues (EXIF, provenance markers); no AI call, never feeds the verdict (`lib/context-detector/media.ts`, see `docs/adr-content-detector.md`)
 
@@ -43,13 +44,14 @@ Pipeline in `lib/context-detector/orchestrator.ts` (`runInvestigation`):
 1. `skills.ts` detects input type and selects relevant skills (web search skills only if a search provider is configured).
 2. First LLM call (`requestStructuredJson` in `ai.ts`) with the extraction prompt from `prompts.ts` → claims + search plan.
 3. Up to 6 deduplicated queries go to `search.ts` (`CONTEXT_DETECTOR_SEARCH_PROVIDER` = `none` | `generic` | `brave` | `tavily`).
-4. Results become an evidence packet; second LLM call produces analysis + verdicts.
-5. Everything is passed through `normalize.ts` (LLM output is never trusted raw), assembled into a `Dossier`, optionally rendered to Markdown by `report.ts`.
-6. Saved in `store.ts` — an **in-memory Map with 30-min TTL** (lost on restart, not shared across instances).
+4. Results become an evidence packet. If media is present, `media.ts` sends image `dataUrl`s and client-supplied video `frames` to a vision model; those observations are added to the analysis input and merged into `media_findings`, always framed as observations that prove neither authenticity nor manipulation.
+5. Second LLM call produces analysis + verdicts.
+6. Everything is passed through `normalize.ts` (LLM output is never trusted raw), assembled into a `Dossier`, optionally rendered to Markdown by `report.ts`.
+7. Saved in `store.ts` — an **in-memory Map with 30-min TTL** (lost on restart, not shared across instances). `chat.ts` reads it to ground `/chat`.
 
 `ai.ts` talks to any OpenAI-compatible `/chat/completions` endpoint via plain `fetch` (default Groq, `llama-3.3-70b-versatile`) and extracts a JSON object from the response. No SDK dependencies.
 
-Env vars (see `.env.example`): `CONTEXT_DETECTOR_AI_API_KEY`, `CONTEXT_DETECTOR_AI_BASE_URL`, `CONTEXT_DETECTOR_AI_MODEL`, `CONTEXT_DETECTOR_SEARCH_PROVIDER`, `CONTEXT_DETECTOR_SEARCH_API_KEY`, `CONTEXT_DETECTOR_SEARCH_URL`.
+Env vars (see `.env.example`): per-provider keys (`CONTEXT_DETECTOR_GROQ_API_KEY`, `_MISTRAL_`, `_GEMINI_`, `_XAI_`, `_HF_`), `CONTEXT_DETECTOR_AI_PROVIDERS`, `CONTEXT_DETECTOR_*_MODEL`, `CONTEXT_DETECTOR_*_VISION_MODEL`, `CONTEXT_DETECTOR_AI_MAX_TOKENS`, `CONTEXT_DETECTOR_CHAT_MAX_TOKENS`, `CONTEXT_DETECTOR_SEARCH_PROVIDERS`, `CONTEXT_DETECTOR_TAVILY_API_KEY`, `CONTEXT_DETECTOR_BRAVE_API_KEY`.
 
 ### Skills in `.agents/skills/`
 

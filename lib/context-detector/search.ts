@@ -58,13 +58,24 @@ const buildProvider = (id: SearchProviderId): SearchProviderConfig | undefined =
     return { id, label: id, apiKey };
 };
 
+const isSearchDisabled = (value: string): boolean =>
+    ["none", "off", "disabled", "false"].includes(value.trim().toLowerCase());
+
 export const getSearchProviders = (): SearchProviderConfig[] => {
     const legacy = envValue("CONTEXT_DETECTOR_SEARCH_PROVIDER").toLowerCase();
-    const configured = (legacy ? [legacy] : envValue("CONTEXT_DETECTOR_SEARCH_PROVIDERS").split(","))
+    const configuredRaw = legacy || envValue("CONTEXT_DETECTOR_SEARCH_PROVIDERS");
+    if (isSearchDisabled(configuredRaw)) {
+        return [];
+    }
+
+    const configured = configuredRaw
+        .split(",")
         .map((value) => value.trim().toLowerCase())
         .filter(isSearchProviderId);
 
-    const order = configured.length ? Array.from(new Set(configured)) : DEFAULT_PROVIDER_ORDER;
+    // The env list sets the preference order; any other provider with a key is
+    // still tried as a fallback instead of failing on the first throttled one.
+    const order = Array.from(new Set([...configured, ...DEFAULT_PROVIDER_ORDER]));
     return order
         .map((id) => buildProvider(id))
         .filter((provider): provider is SearchProviderConfig => Boolean(provider));
