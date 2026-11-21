@@ -181,7 +181,7 @@ export const openApiDocument = {
                 operationId: "extractContextDetectorClaims",
                 summary: "Décomposer un contenu en affirmations vérifiables",
                 description:
-                    "Première étape du pipeline : ne produit ni preuve ni verdict. Nécessite CONTEXT_DETECTOR_AI_API_KEY.",
+                    "Première étape du pipeline : ne produit ni preuve ni verdict. Nécessite au moins une clé IA (Groq, xAI, Mistral, Gemini ou Hugging Face) ; les fournisseurs sont essayés en cascade selon CONTEXT_DETECTOR_AI_PROVIDERS.",
                 requestBody: {
                     required: true,
                     content: {
@@ -203,7 +203,7 @@ export const openApiDocument = {
                 operationId: "runContextDetectorInvestigation",
                 summary: "Lancer une investigation complète et produire un dossier sourcé",
                 description:
-                    "Pipeline : extraction des affirmations > plan de recherche > recherche web (si configurée) > évaluation des sources, contradictions et chronologie > verdicts nuancés > dossier Markdown. Les URL citées proviennent exclusivement des résultats de recherche réellement récupérés : aucune citation n'est inventée. Sans preuve exploitable, les verdicts sont `unverifiable`.",
+                    "Pipeline : extraction des affirmations > plan de recherche > recherche web (Tavily, avec repli Brave ou générique) > évaluation des sources, contradictions et chronologie > verdicts nuancés > dossier Markdown. Les fournisseurs IA (Groq, xAI, Mistral, Gemini, Hugging Face) sont essayés en cascade. Les URL citées proviennent exclusivement des résultats de recherche réellement récupérés : aucune citation n'est inventée. Sans preuve exploitable, les verdicts sont `unverifiable`.",
                 requestBody: {
                     required: true,
                     content: {
