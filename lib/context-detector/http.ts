@@ -3,6 +3,7 @@ import {
     ContextDetectorAiError,
     ContextDetectorConfigurationError,
 } from "@/lib/context-detector/ai";
+import { MediaSignalsError } from "@/lib/context-detector/media";
 import { ContextDetectorValidationError } from "@/lib/context-detector/normalize";
 
 export const contextDetectorErrorResponse = (error: unknown): NextResponse => {
@@ -11,6 +12,9 @@ export const contextDetectorErrorResponse = (error: unknown): NextResponse => {
     const message = error instanceof Error ? error.message : "Erreur inconnue";
     const detail = process.env.NODE_ENV === "development" ? String(error) : undefined;
 
+    if (error instanceof MediaSignalsError) {
+        return NextResponse.json({ message, code: error.code }, { status: error.status });
+    }
     if (error instanceof ContextDetectorValidationError) {
         return NextResponse.json({ message }, { status: 400 });
     }

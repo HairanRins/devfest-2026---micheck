@@ -35,6 +35,7 @@ Routes (public, under the `(client)` route group — no auth):
 - `POST /api/context-detector/claims` — claim extraction only
 - `POST /api/context-detector/investigate` — full investigation, returns 201
 - `GET  /api/context-detector/investigations/[id]` — fetch a stored result
+- `POST /api/context-detector/media-signals` — multipart image (≤ 4 MB, JPEG/PNG/WebP sniffed from bytes) → technical clues (EXIF, provenance markers); no AI call, never feeds the verdict (`lib/context-detector/media.ts`, see `docs/adr-content-detector.md`)
 
 Routes are thin: validate with `validateInvestigationRequest` (`lib/context-detector/normalize.ts`), call the orchestrator, and map errors with `contextDetectorErrorResponse` (`lib/context-detector/http.ts`): validation → 400, missing config → 503, AI provider failure → 502, else 500.
 

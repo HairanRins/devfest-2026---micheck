@@ -216,7 +216,75 @@ curl -s http://localhost:3000/api/context-detector/investigations/<investigation
 - **200:** the same body as 4.3.
 - **404:** the id is unknown, the 30 minutes have passed, or the server restarted. In dev, a hot reload also clears the store.
 
-### 4.5 `POST /api/bot/bot_recommandation` (legacy, out of scope)
+### 4.5 `POST /api/context-detector/media-signals`
+
+Reads technical clues from one image (PRODUCT_SCOPE P1 #5, ADR-001 §3). It makes **no AI call** and costs nothing. The file is analysed in memory and never stored. The signals are clues only: they are never a verdict and are not sent to `/investigate`.
+
+| Item | Value |
+|---|---|
+| Request | `multipart/form-data` with one field, `file` |
+| Accepted formats | JPEG, PNG, WebP, checked on the file's **content**, not its name or declared type |
+| Size limit | 4 MB per file, 1 file per request |
+| Not returned | GPS coordinates (only `gps_present: true/false`) |
+
+**In Swagger UI:** open the endpoint, choose a file in the `file` field, then click **Execute**. Good test files:
+- a photo straight from a phone camera, which has EXIF data
+- a screenshot or an image downloaded from a social network, which usually has none
+- a `.gif` file, which should return 415
+
+```bash
+curl -s -X POST http://localhost:3000/api/context-detector/media-signals \
+  -F "file=@/path/to/photo.jpg"
+```
+
+Response 200:
+
+```jsonc
+{
+  "file_name": "photo.jpg",
+  "size_bytes": 2483112,
+  "mime_type_declared": "image/jpeg",      // what the client said (not trusted)
+  "mime_type_detected": "image/jpeg",      // what the bytes are
+  "width": 4032, "height": 3024,
+  "exif": { "make": "Nikon", "model": "D750", "date_time_original": "2021:03:14 09:26:53", "gps_present": true },  // or null
+  "provenance_markers": [],                // "c2pa" | "iptc_ai_source" | "generation_parameters"
+  "signals": [ { "code": "camera_declared", "category": "metadata", "message": "Appareil déclaré dans l'EXIF : …" } ],
+  "analyzed_at": "2026-11-21T10:00:00.000Z",
+  "disclaimer": "Ces signaux ne prouvent pas l'authenticité : …"
+}
+```
+
+| Signal `code` | Category | Triggered when |
+|---|---|---|
+| `mime_mismatch` | format | The declared type differs from the real format |
+| `extension_mismatch` | format | The file extension differs from the real format |
+| `low_resolution` | format | The longest side is under 400 px |
+| `no_exif` | metadata | No EXIF data (common after social networks strip it, so it proves nothing) |
+| `exif_unreadable` | metadata | An EXIF block exists but can't be read |
+| `camera_declared` | metadata | EXIF names a camera make or model |
+| `capture_date_declared` | metadata | EXIF contains a capture date |
+| `software_declared` | metadata | EXIF names a software (export or editing) |
+| `gps_present` | privacy | GPS data is present (coordinates are not returned) |
+| `c2pa_manifest` | provenance | A C2PA / Content Credentials manifest is present (its signature is **not** verified) |
+| `iptc_ai_source_declared` | provenance | XMP metadata declares IPTC `DigitalSourceType` = AI-generated |
+| `generation_parameters` | provenance | The PNG has text fields that image generators write (`parameters`, `prompt`, `workflow`, …) |
+
+Errors use the format `{ "message": "…", "code": "…" }`:
+
+| Status | `code` | When |
+|---|---|---|
+| 400 | `INVALID_MULTIPART` | The multipart body can't be parsed |
+| 400 | `FILE_REQUIRED` | No `file` field, or `file` is text rather than a file |
+| 400 | `TOO_MANY_FILES` | More than one `file` |
+| 400 | `EMPTY_FILE` | The file has 0 bytes |
+| 413 | `FILE_TOO_LARGE` | Over 4 MB. When `Content-Length` announces it, the body is rejected **before** it is read. |
+| 415 | `MULTIPART_REQUIRED` | The request is not `multipart/form-data` |
+| 415 | `UNSUPPORTED_MEDIA_TYPE` | The real content is not JPEG, PNG or WebP (for example a GIF renamed `.png`) |
+| 422 | `UNREADABLE_IMAGE` | The image is truncated or damaged, so its dimensions can't be read |
+
+**Using it with `/investigate` (ADR-001 §3):** the UI sends the image to `/media-signals` and the text to `/investigate` **in parallel**. It passes only the file's `name` and `mimeType` in `content.media[]`. The signals are shown in their own block of the result card.
+
+### 4.6 `POST /api/bot/bot_recommandation` (legacy, out of scope)
 
 This is the chatbot from the old e-commerce shop. It is marked `deprecated` in Swagger and **does not work** in this repository: `@langchain/*` is not installed and `@/data/prompt-data` is missing. It is documented here only for completeness. Example body: `{ "prompt": "Quel produit me conseillez-vous pour un cadeau ?" }`
 
@@ -231,6 +299,7 @@ Based on the success criteria in PRODUCT_SCOPE §6.
 - [ ] With search on, every URL in `sources` comes from the search results (it is never invented), and every verdict cites at least one `evidence_ids` **or** is `unverifiable`.
 - [ ] Scenarios 2 and 3: `limitations` includes "L'analyse binaire des médias … n'a pas été effectuée."
 - [ ] `investigations/{id}` with the id from the previous call returns 200.
+- [ ] `media-signals` returns 200 for a JPEG, PNG and WebP, 415 for a GIF, and 413 for a file over 4 MB. A photo with GPS data returns `gps_present: true` and no coordinates.
 - [ ] The time shown by Swagger ("Duration") stays under 60 s per scenario, as PRODUCT_SCOPE §6 requires.
 
 ## 6. Gaps between PRODUCT_SCOPE.md and the code
@@ -243,7 +312,7 @@ These are things to keep in mind during testing and the demo.
 | §2 "Without evidence, the verdict is `unverifiable`" | ✅ **Fixed.** The server now enforces it. `confirmed`, `refuted`, `partially_confirmed` and `misleading_or_out_of_context` with no valid `evidence_ids` become `unverifiable`/`low`, with a limitation explaining why. The same rule applies to the overall verdict. | audit bug 5, `normalizeClaimVerdicts` and `normalizeOverallVerdict` |
 | §6 "Scenarios under one minute" | Not guaranteed: up to 2×60 s of AI calls plus 20 s of search, with no overall timeout. | audit bug 10 |
 | §3 P0 #2 Google Fact Check Tools | Not implemented. There is no `GOOGLE_FACTCHECK_API_KEY` variable yet. | — |
-| §3 P1 #5 media signals (EXIF, MIME, dimensions) | Not implemented. Only the declared `mimeType` and `name` reach the AI. | audit §3 |
+| §3 P1 #5 media signals (EXIF, MIME, dimensions) | ✅ **Implemented** as `POST /api/context-detector/media-signals`, with no AI call and kept separate from the verdict. | ADR-001, §4.5 |
 | §5 scenario 2 "first publication found" | Possible only if search returns old results. The video itself is never analysed. | — |
 | §8 rate limiting before public deployment | Not implemented. | audit bug 2 |
 

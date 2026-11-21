@@ -1,6 +1,6 @@
 # ADR-001: API shape for the Content Detector
 
-- **Status:** proposed
+- **Status:** accepted. Implemented on 2026-11-21: `POST /api/context-detector/media-signals` (`lib/context-detector/media.ts`).
 - **Date:** 2026-11-21
 - **Inputs:** `PRODUCT_SCOPE.md`, `docs/audit-api.md`, `docs/api-testing.md`, `lib/context-detector/*`
 
@@ -108,7 +108,7 @@ Search costs the same way: each investigation uses up to 6 queries, so 1,000 fre
 **Option B: dedicated Content Detector endpoints.**
 
 1. **Text and URLs:** keep `POST /api/context-detector/investigate`, plus `/claims`, as the single JSON entry point. The UI calls it as the scope document says (P0 #1).
-2. **Images:** add `POST /api/context-detector/media-signals` (`multipart/form-data`, field `file`, optional `text`). It is limited to 4 MB, 1 file, and JPEG, PNG or WebP. It makes no AI call. It returns `{ mime_type_declared, mime_type_detected, width, height, size_bytes, exif: {...} | null, signals: [...], disclaimer }`. The `disclaimer` is fixed: "Ces signaux ne prouvent pas l'authenticité."
+2. **Images:** add `POST /api/context-detector/media-signals` (`multipart/form-data`, field `file`). It is limited to 4 MB, 1 file, and JPEG, PNG or WebP. It makes no AI call. It returns `{ file_name, size_bytes, mime_type_declared, mime_type_detected, width, height, exif: {...} | null, provenance_markers, signals: [...], analyzed_at, disclaimer }`. GPS coordinates are never returned, only whether they are present. The `disclaimer` is fixed: "Ces signaux ne prouvent pas l'authenticité."
 3. **Images in the dossier:** for an image, the UI calls both routes **in parallel**. It passes the real metadata (`name`, `mimeType`) in `content.media[]` to `/investigate`. The signals are shown in their own block of the card and are **never used as input to the verdict**.
 4. **The legacy chat endpoint** `bot_recommandation` is not reused and stays `deprecated`. It belongs to the old shop and is out of scope.
 5. **Streaming:** none. The response is one checked JSON object, and the UI shows the steps with client-side state (P1 #6).
@@ -133,11 +133,11 @@ Search costs the same way: each investigation uses up to 6 queries, so 1,000 fre
 - **No visible progress from the server.** Simulated steps on the client, as the scope document accepts.
 - **Rate limits and the store are not shared between instances.** Acceptable for the demo; replace both with Redis later (§8).
 - **Duration over 1 minute is possible (§6).** Fix it outside this ADR: an overall timeout of about 45 s on `/investigate`, and shorter timeouts for the AI (25 s) and search (8 s).
-- **EXIF parsing needs a small dependency** (for example `exifr`), or a manual JPEG parser. To be decided during implementation.
+- **EXIF parsing.** Decided during implementation: a parser with no dependencies in `media.ts`. It reads the JPEG, PNG and WebP containers and the TIFF EXIF data in both byte orders. It covers only the fields listed above, so maker notes and IPTC IIM are not read.
 
 ## 5. Follow-up work (outside this ADR)
 
-1. Create `POST /api/context-detector/media-signals` and add it to `lib/openapi.ts`, with `multipart/form-data` examples.
+1. ~~Create `POST /api/context-detector/media-signals` and add it to `lib/openapi.ts`~~: done.
 2. Add an in-memory rate limiter for the `/api/context-detector/*` routes, returning 429 with `Retry-After`.
 3. Body limit on `/investigate` and `/claims` (100 KB); stop accepting `dataUrl` (audit bug 13).
 4. Overall timeout of about 45 s and shorter timeouts on the AI and search calls (audit bug 10).

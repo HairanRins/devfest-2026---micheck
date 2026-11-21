@@ -332,6 +332,111 @@ export const openApiDocument = {
                 },
             },
         },
+        "/api/context-detector/media-signals": {
+            post: {
+                tags: ["public", "context-detector"],
+                operationId: "getContextDetectorMediaSignals",
+                summary: "Lire les signaux techniques d'une image (indices, jamais un verdict)",
+                description:
+                    "Analyse locale, sans appel IA ni coût : format réel (vérifié sur les octets), dimensions, EXIF (appareil, logiciel, dates), présence de GPS (coordonnées jamais renvoyées), marqueurs de provenance (C2PA, IPTC DigitalSourceType, paramètres de générateurs). Limites : 1 fichier dans le champ `file`, 4 Mo maximum, JPEG, PNG ou WebP. Le fichier est traité en mémoire et jamais stocké. Ces signaux ne prouvent pas l'authenticité et ne détectent pas les deepfakes (PRODUCT_SCOPE.md §7) ; ils ne sont pas transmis au verdict de /investigate. Dans Swagger UI, choisissez un fichier puis cliquez sur Execute.",
+                requestBody: {
+                    required: true,
+                    content: {
+                        "multipart/form-data": {
+                            schema: ref("MediaSignalsRequest"),
+                            encoding: {
+                                file: { contentType: "image/jpeg, image/png, image/webp" },
+                            },
+                        },
+                    },
+                },
+                responses: {
+                    200: {
+                        description: "Signaux techniques de l'image",
+                        content: {
+                            "application/json": {
+                                schema: ref("MediaSignalsResponse"),
+                                examples: {
+                                    photo_avec_exif: {
+                                        summary: "Photo d'appareil avec EXIF et GPS",
+                                        value: {
+                                            file_name: "photo.jpg",
+                                            size_bytes: 2483112,
+                                            mime_type_declared: "image/jpeg",
+                                            mime_type_detected: "image/jpeg",
+                                            width: 4032,
+                                            height: 3024,
+                                            exif: {
+                                                make: "Nikon",
+                                                model: "D750",
+                                                date_time_original: "2021:03:14 09:26:53",
+                                                gps_present: true,
+                                            },
+                                            provenance_markers: [],
+                                            signals: [
+                                                {
+                                                    code: "camera_declared",
+                                                    category: "metadata",
+                                                    message: "Appareil déclaré dans l'EXIF : Nikon D750. Ces champs peuvent être modifiés.",
+                                                },
+                                                {
+                                                    code: "capture_date_declared",
+                                                    category: "metadata",
+                                                    message: "Date de prise de vue déclarée : 2021:03:14 09:26:53 (horloge de l'appareil, modifiable). À comparer avec la date de l'événement allégué.",
+                                                },
+                                                {
+                                                    code: "gps_present",
+                                                    category: "privacy",
+                                                    message: "Le fichier contient des coordonnées GPS. Elles ne sont pas renvoyées par MiCheck pour protéger la vie privée ; évitez de partager l'original.",
+                                                },
+                                            ],
+                                            analyzed_at: "2026-11-21T10:00:00.000Z",
+                                            disclaimer: "Ces signaux ne prouvent pas l'authenticité : ce sont des indices à croiser avec une vérification des sources. MiCheck ne détecte pas les deepfakes ni les images générées par IA de manière fiable.",
+                                        },
+                                    },
+                                    image_reseau_social: {
+                                        summary: "Image recompressée sans métadonnées (cas le plus courant)",
+                                        value: {
+                                            file_name: "capture.webp",
+                                            size_bytes: 84211,
+                                            mime_type_declared: "image/webp",
+                                            mime_type_detected: "image/webp",
+                                            width: 1080,
+                                            height: 1350,
+                                            exif: null,
+                                            provenance_markers: [],
+                                            signals: [
+                                                {
+                                                    code: "no_exif",
+                                                    category: "metadata",
+                                                    message: "Aucune métadonnée EXIF. C'est courant pour les images partagées sur les réseaux sociaux ou les messageries, qui les suppriment : cela ne prouve rien dans un sens ni dans l'autre.",
+                                                },
+                                            ],
+                                            analyzed_at: "2026-11-21T10:00:00.000Z",
+                                            disclaimer: "Ces signaux ne prouvent pas l'authenticité : ce sont des indices à croiser avec une vérification des sources. MiCheck ne détecte pas les deepfakes ni les images générées par IA de manière fiable.",
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                    400: response(
+                        "Requête invalide : multipart illisible, champ `file` absent ou texte, plusieurs fichiers, fichier vide",
+                        ref("MediaSignalsError"),
+                    ),
+                    413: response("Fichier de plus de 4 Mo", ref("MediaSignalsError")),
+                    415: response(
+                        "Corps non multipart, ou format réel autre que JPEG, PNG ou WebP",
+                        ref("MediaSignalsError"),
+                    ),
+                    422: response(
+                        "Image tronquée ou endommagée : dimensions illisibles",
+                        ref("MediaSignalsError"),
+                    ),
+                    500: errorResponse(),
+                },
+            },
+        },
         "/api/products": {
             get: {
                 tags: ["public", "products"],
@@ -1076,6 +1181,124 @@ export const openApiDocument = {
                     investigation_id: { type: "string", format: "uuid" },
                     dossier: ref("ContextDetectorDossier"),
                     report: { type: "string", description: "Dossier Markdown prêt à afficher" },
+                },
+            },
+            MediaSignalsRequest: {
+                type: "object",
+                required: ["file"],
+                properties: {
+                    file: {
+                        type: "string",
+                        format: "binary",
+                        description: "Une image JPEG, PNG ou WebP de 4 Mo maximum",
+                    },
+                },
+            },
+            MediaSignal: {
+                type: "object",
+                required: ["code", "category", "message"],
+                properties: {
+                    code: {
+                        type: "string",
+                        enum: [
+                            "mime_mismatch",
+                            "extension_mismatch",
+                            "low_resolution",
+                            "exif_unreadable",
+                            "no_exif",
+                            "camera_declared",
+                            "capture_date_declared",
+                            "software_declared",
+                            "gps_present",
+                            "c2pa_manifest",
+                            "iptc_ai_source_declared",
+                            "generation_parameters",
+                        ],
+                    },
+                    category: {
+                        type: "string",
+                        enum: ["format", "metadata", "provenance", "privacy"],
+                    },
+                    message: { type: "string", description: "Explication en français, formulée comme un indice" },
+                },
+            },
+            MediaExifSummary: {
+                type: "object",
+                required: ["gps_present"],
+                properties: {
+                    make: { type: "string" },
+                    model: { type: "string" },
+                    software: { type: "string" },
+                    date_time_original: { type: "string", description: "Format EXIF `AAAA:MM:JJ HH:MM:SS`" },
+                    date_time_modified: { type: "string", description: "Format EXIF `AAAA:MM:JJ HH:MM:SS`" },
+                    gps_present: {
+                        type: "boolean",
+                        description: "Présence de coordonnées GPS. Les coordonnées ne sont jamais renvoyées.",
+                    },
+                },
+            },
+            MediaSignalsResponse: {
+                type: "object",
+                required: [
+                    "file_name",
+                    "size_bytes",
+                    "mime_type_declared",
+                    "mime_type_detected",
+                    "width",
+                    "height",
+                    "exif",
+                    "provenance_markers",
+                    "signals",
+                    "analyzed_at",
+                    "disclaimer",
+                ],
+                properties: {
+                    file_name: { type: "string" },
+                    size_bytes: { type: "integer", maximum: 4194304 },
+                    mime_type_declared: {
+                        type: "string",
+                        nullable: true,
+                        description: "Type annoncé par le client (non fiable)",
+                    },
+                    mime_type_detected: {
+                        type: "string",
+                        enum: ["image/jpeg", "image/png", "image/webp"],
+                        description: "Type réel déterminé à partir des octets du fichier",
+                    },
+                    width: { type: "integer" },
+                    height: { type: "integer" },
+                    exif: { ...ref("MediaExifSummary"), nullable: true },
+                    provenance_markers: {
+                        type: "array",
+                        items: {
+                            type: "string",
+                            enum: ["c2pa", "iptc_ai_source", "generation_parameters"],
+                        },
+                        description: "Marqueurs déclaratifs trouvés dans le fichier, non vérifiés",
+                    },
+                    signals: { type: "array", items: ref("MediaSignal") },
+                    analyzed_at: { type: "string", format: "date-time" },
+                    disclaimer: { type: "string" },
+                },
+            },
+            MediaSignalsError: {
+                type: "object",
+                required: ["message", "code"],
+                properties: {
+                    message: { type: "string" },
+                    code: {
+                        type: "string",
+                        enum: [
+                            "MULTIPART_REQUIRED",
+                            "INVALID_MULTIPART",
+                            "FILE_REQUIRED",
+                            "TOO_MANY_FILES",
+                            "EMPTY_FILE",
+                            "FILE_TOO_LARGE",
+                            "UNSUPPORTED_MEDIA_TYPE",
+                            "UNREADABLE_IMAGE",
+                        ],
+                    },
                 },
             },
         },

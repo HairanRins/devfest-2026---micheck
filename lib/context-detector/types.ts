@@ -287,3 +287,36 @@ export interface SkillsResponse {
     skills: DetectorSkill[];
     note: string;
 }
+
+export type ImageMimeType = "image/jpeg" | "image/png" | "image/webp";
+
+export type MediaSignalCategory = "format" | "metadata" | "provenance" | "privacy";
+
+export interface MediaSignal {
+    code: string;
+    category: MediaSignalCategory;
+    message: string;
+}
+
+export interface ExifSummary {
+    make?: string;
+    model?: string;
+    software?: string;
+    date_time_original?: string;
+    date_time_modified?: string;
+    gps_present: boolean;
+}
+
+export interface MediaSignalsResponse {
+    file_name: string;
+    size_bytes: number;
+    mime_type_declared: string | null;
+    mime_type_detected: ImageMimeType;
+    width: number;
+    height: number;
+    exif: ExifSummary | null;
+    provenance_markers: string[];
+    signals: MediaSignal[];
+    analyzed_at: string;
+    disclaimer: string;
+}
