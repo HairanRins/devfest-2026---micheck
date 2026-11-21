@@ -1,12 +1,19 @@
 import { SearchResult } from "@/lib/context-detector/types";
 
-type SearchProvider = "none" | "generic" | "brave" | "tavily";
+type SearchProviderId = "tavily" | "brave" | "generic";
+
+interface SearchProviderConfig {
+    id: SearchProviderId;
+    label: string;
+    apiKey: string;
+}
 
 export interface SearchOutcome {
     results: SearchResult[];
     note: string;
 }
 
+const DEFAULT_PROVIDER_ORDER: SearchProviderId[] = ["tavily", "brave", "generic"];
 const DEFAULT_BRAVE_URL = "https://api.search.brave.com/res/v1/web/search";
 const DEFAULT_TAVILY_URL = "https://api.tavily.com/search";
 const MAX_RESULTS_PER_QUERY = 6;
@@ -25,17 +32,48 @@ interface RawSearchResult {
     page_age?: unknown;
 }
 
-export const getSearchProvider = (): SearchProvider => {
-    const provider = process.env.CONTEXT_DETECTOR_SEARCH_PROVIDER?.trim().toLowerCase();
-    if (provider === "generic" || provider === "brave" || provider === "tavily") {
-        return provider;
+const envValue = (...names: string[]): string => {
+    for (const name of names) {
+        const value = process.env[name]?.trim();
+        if (value) {
+            return value;
+        }
     }
-    return "none";
+    return "";
 };
 
-export const isSearchConfigured = (): boolean =>
-    getSearchProvider() !== "none" &&
-    Boolean(process.env.CONTEXT_DETECTOR_SEARCH_API_KEY?.trim());
+const isSearchProviderId = (value: string): value is SearchProviderId =>
+    (DEFAULT_PROVIDER_ORDER as string[]).includes(value);
+
+const buildProvider = (id: SearchProviderId): SearchProviderConfig | undefined => {
+    const keyEnvNames: Record<SearchProviderId, string[]> = {
+        tavily: ["CONTEXT_DETECTOR_TAVILY_API_KEY", "CONTEXT_DETECTOR_SEARCH_API_KEY"],
+        brave: ["CONTEXT_DETECTOR_BRAVE_API_KEY", "CONTEXT_DETECTOR_SEARCH_API_KEY"],
+        generic: ["CONTEXT_DETECTOR_SEARCH_API_KEY"],
+    };
+    const apiKey = envValue(...keyEnvNames[id]);
+    if (!apiKey) {
+        return undefined;
+    }
+    return { id, label: id, apiKey };
+};
+
+export const getSearchProviders = (): SearchProviderConfig[] => {
+    const legacy = envValue("CONTEXT_DETECTOR_SEARCH_PROVIDER").toLowerCase();
+    const configured = (legacy ? [legacy] : envValue("CONTEXT_DETECTOR_SEARCH_PROVIDERS").split(","))
+        .map((value) => value.trim().toLowerCase())
+        .filter(isSearchProviderId);
+
+    const order = configured.length ? Array.from(new Set(configured)) : DEFAULT_PROVIDER_ORDER;
+    return order
+        .map((id) => buildProvider(id))
+        .filter((provider): provider is SearchProviderConfig => Boolean(provider));
+};
+
+export const getSearchProvider = (): SearchProviderId | "none" =>
+    getSearchProviders()[0]?.id ?? "none";
+
+export const isSearchConfigured = (): boolean => getSearchProviders().length > 0;
 
 const asText = (value: unknown): string | undefined =>
     typeof value === "string" && value.trim() ? value.trim() : undefined;
@@ -67,34 +105,37 @@ const normalizeResult = (
     };
 };
 
-const fetchGeneric = async (query: string): Promise<RawSearchResult[]> => {
-    const url = process.env.CONTEXT_DETECTOR_SEARCH_URL?.trim();
+const fetchGeneric = async (
+    provider: SearchProviderConfig,
+    query: string,
+): Promise<RawSearchResult[]> => {
+    const url = envValue("CONTEXT_DETECTOR_SEARCH_URL");
     if (!url) {
-        throw new Error("CONTEXT_DETECTOR_SEARCH_URL manquante");
+        throw new Error("URL manquante");
     }
 
     const response = await fetch(url, {
         method: "POST",
         headers: {
             "content-type": "application/json",
-            authorization: `Bearer ${process.env.CONTEXT_DETECTOR_SEARCH_API_KEY}`,
+            authorization: `Bearer ${provider.apiKey}`,
         },
         body: JSON.stringify({ q: query, count: MAX_RESULTS_PER_QUERY }),
         signal: AbortSignal.timeout(20000),
     });
     if (!response.ok) {
-        throw new Error(`Statut ${response.status}`);
+        throw new Error(`HTTP ${response.status}`);
     }
 
-    const payload = (await response.json()) as {
-        results?: RawSearchResult[];
-    };
+    const payload = (await response.json()) as { results?: RawSearchResult[] };
     return Array.isArray(payload.results) ? payload.results : [];
 };
 
-const fetchBrave = async (query: string): Promise<RawSearchResult[]> => {
-    const baseUrl =
-        process.env.CONTEXT_DETECTOR_SEARCH_URL?.trim() || DEFAULT_BRAVE_URL;
+const fetchBrave = async (
+    provider: SearchProviderConfig,
+    query: string,
+): Promise<RawSearchResult[]> => {
+    const baseUrl = envValue("CONTEXT_DETECTOR_SEARCH_URL") || DEFAULT_BRAVE_URL;
     const endpoint = `${baseUrl}${baseUrl.includes("?") ? "&" : "?"}${new URLSearchParams({
         q: query,
         count: String(MAX_RESULTS_PER_QUERY),
@@ -103,12 +144,12 @@ const fetchBrave = async (query: string): Promise<RawSearchResult[]> => {
     const response = await fetch(endpoint, {
         headers: {
             accept: "application/json",
-            "x-subscription-token": process.env.CONTEXT_DETECTOR_SEARCH_API_KEY ?? "",
+            "x-subscription-token": provider.apiKey,
         },
         signal: AbortSignal.timeout(20000),
     });
     if (!response.ok) {
-        throw new Error(`Statut ${response.status}`);
+        throw new Error(`HTTP ${response.status}`);
     }
 
     const payload = (await response.json()) as {
@@ -117,82 +158,95 @@ const fetchBrave = async (query: string): Promise<RawSearchResult[]> => {
     return Array.isArray(payload.web?.results) ? payload.web.results : [];
 };
 
-const fetchTavily = async (query: string): Promise<RawSearchResult[]> => {
-    const baseUrl =
-        process.env.CONTEXT_DETECTOR_SEARCH_URL?.trim() || DEFAULT_TAVILY_URL;
+const fetchTavily = async (
+    provider: SearchProviderConfig,
+    query: string,
+): Promise<RawSearchResult[]> => {
+    const baseUrl = envValue("CONTEXT_DETECTOR_TAVILY_URL") || DEFAULT_TAVILY_URL;
 
     const response = await fetch(baseUrl, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-            api_key: process.env.CONTEXT_DETECTOR_SEARCH_API_KEY,
+            api_key: provider.apiKey,
             query,
             max_results: MAX_RESULTS_PER_QUERY,
         }),
         signal: AbortSignal.timeout(20000),
     });
     if (!response.ok) {
-        throw new Error(`Statut ${response.status}`);
+        throw new Error(`HTTP ${response.status}`);
     }
 
-    const payload = (await response.json()) as {
-        results?: RawSearchResult[];
-    };
+    const payload = (await response.json()) as { results?: RawSearchResult[] };
     return Array.isArray(payload.results) ? payload.results : [];
 };
 
-const fetchResults = (provider: SearchProvider, query: string) => {
-    if (provider === "brave") {
-        return fetchBrave(query);
+const fetchResults = (provider: SearchProviderConfig, query: string) => {
+    if (provider.id === "brave") {
+        return fetchBrave(provider, query);
     }
-    if (provider === "tavily") {
-        return fetchTavily(query);
+    if (provider.id === "tavily") {
+        return fetchTavily(provider, query);
     }
-    return fetchGeneric(query);
+    return fetchGeneric(provider, query);
 };
 
 export const searchWeb = async (queries: string[]): Promise<SearchOutcome> => {
-    const provider = getSearchProvider();
-    if (!isSearchConfigured()) {
+    const providers = getSearchProviders();
+    if (providers.length === 0) {
         return {
             results: [],
-            note: "Recherche web indisponible : configurez CONTEXT_DETECTOR_SEARCH_PROVIDER et CONTEXT_DETECTOR_SEARCH_API_KEY pour vérifier sur Internet.",
+            note: "Recherche web indisponible : configurez une clé de recherche (Tavily, Brave ou générique).",
         };
     }
 
-    const uniqueQueries = Array.from(new Set(queries.map((query) => query.trim()).filter(Boolean)));
+    const uniqueQueries = Array.from(
+        new Set(queries.map((query) => query.trim()).filter(Boolean)),
+    );
     if (uniqueQueries.length === 0) {
         return { results: [], note: "Aucune requête de recherche générée." };
     }
 
-    const batches = await Promise.all(
-        uniqueQueries.map(async (query) => {
-            try {
-                const rawResults = await fetchResults(provider, query);
-                return rawResults.map((raw) => ({ query, raw }));
-            } catch (error) {
-                console.error("Context Detector search failed:", error);
-                return [];
-            }
-        }),
-    );
+    const failures: string[] = [];
+    for (const provider of providers) {
+        const batches = await Promise.all(
+            uniqueQueries.map(async (query) => {
+                try {
+                    const rawResults = await fetchResults(provider, query);
+                    return rawResults.map((raw) => ({ query, raw }));
+                } catch (error) {
+                    const reason = error instanceof Error ? error.message : String(error);
+                    failures.push(`${provider.id}: ${reason}`);
+                    console.error("Context Detector search provider failed:", provider.id, reason);
+                    return [];
+                }
+            }),
+        );
 
-    const seen = new Set<string>();
-    const results: SearchResult[] = [];
-    batches.flat().forEach(({ query, raw }) => {
-        const normalized = normalizeResult(raw, query);
-        if (!normalized || seen.has(normalized.url)) {
-            return;
+        const seen = new Set<string>();
+        const results: SearchResult[] = [];
+        batches.flat().forEach(({ query, raw }) => {
+            const normalized = normalizeResult(raw, query);
+            if (!normalized || seen.has(normalized.url)) {
+                return;
+            }
+            seen.add(normalized.url);
+            results.push(normalized);
+        });
+
+        if (results.length > 0) {
+            return {
+                results: results.slice(0, MAX_RESULTS),
+                note: `Sources trouvées via ${provider.label}. Les résultats de recherche sont des pistes, pas des preuves ; seules les sources évaluées doivent étayer un verdict.`,
+            };
         }
-        seen.add(normalized.url);
-        results.push(normalized);
-    });
+    }
 
     return {
-        results: results.slice(0, MAX_RESULTS),
-        note:
-            results.length === 0
-                ? "La recherche web n'a renvoyé aucun résultat exploitable."
-                : "Les résultats de recherche sont des pistes, pas des preuves ; seules les sources ouvertes et évaluées doivent étayer un verdict.",
+        results: [],
+        note: failures.length
+            ? `Aucun moteur de recherche n'a renvoyé de résultat exploitable (${failures.join(" | ")}).`
+            : "Aucun moteur de recherche n'a renvoyé de résultat exploitable.",
     };
 };

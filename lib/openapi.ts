@@ -279,7 +279,7 @@ export const openApiDocument = {
                 operationId: "extractContextDetectorClaims",
                 summary: "Décomposer un contenu en affirmations vérifiables",
                 description:
-                    "Première étape du pipeline : ne produit ni preuve ni verdict (1 appel IA, aucune recherche web). Nécessite CONTEXT_DETECTOR_AI_API_KEY. Le résultat n'est pas stocké.",
+                    "Première étape du pipeline : ne produit ni preuve ni verdict (1 appel IA, aucune recherche web). Nécessite au moins une clé IA (Groq, xAI, Mistral, Gemini ou Hugging Face) ; les fournisseurs sont essayés en cascade selon CONTEXT_DETECTOR_AI_PROVIDERS. Le résultat n'est pas stocké.",
                 requestBody: contextDetectorRequestBody,
                 responses: {
                     200: response("Affirmations extraites", ref("ContextDetectorClaimsResponse")),
@@ -296,7 +296,7 @@ export const openApiDocument = {
                 operationId: "runContextDetectorInvestigation",
                 summary: "Lancer une investigation complète et produire un dossier sourcé",
                 description:
-                    "Pipeline : extraction des affirmations > plan de recherche > recherche web (si configurée) > évaluation des sources, contradictions et chronologie > verdicts nuancés > dossier Markdown. 2 appels IA + recherche web : compter 10 à 60 s. L'URL, le titre, l'éditeur, l'extrait et les dates de chaque preuve proviennent exclusivement des résultats de recherche réellement récupérés, jamais de l'IA. Un verdict `confirmed`, `refuted`, `partially_confirmed` ou `misleading_or_out_of_context` sans preuve citée est ramené côté serveur à `unverifiable` (confiance `low`). Les URL et médias soumis ne sont pas téléchargés. Le dossier est conservé 30 min en mémoire.",
+                    "Pipeline : extraction des affirmations > plan de recherche > recherche web (si configurée : Tavily, avec repli Brave ou générique selon CONTEXT_DETECTOR_SEARCH_PROVIDERS) > évaluation des sources, contradictions et chronologie > verdicts nuancés > dossier Markdown. Les fournisseurs IA (Groq, xAI, Mistral, Gemini, Hugging Face) sont essayés en cascade. 2 appels IA + recherche web : compter 10 à 60 s. L'URL, le titre, l'éditeur, l'extrait et les dates de chaque preuve proviennent exclusivement des résultats de recherche réellement récupérés, jamais de l'IA. Un verdict `confirmed`, `refuted`, `partially_confirmed` ou `misleading_or_out_of_context` sans preuve citée est ramené côté serveur à `unverifiable` (confiance `low`). Les URL et médias soumis ne sont pas téléchargés. Le dossier est conservé 30 min en mémoire.",
                 requestBody: contextDetectorRequestBody,
                 responses: {
                     201: response("Dossier de vérification", ref("ContextDetectorInvestigationResponse")),
