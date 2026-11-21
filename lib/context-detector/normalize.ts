@@ -284,13 +284,13 @@ export const normalizeEvidence = (
         }
         seen.add(sourceId);
 
+        // url, title, publisher, excerpt, published_date and accessed_date always
+        // come from the retrieved search result (the packet), never from the model:
+        // otherwise the model could attach an invented quote or date to a real URL.
         return [
             {
                 ...source,
                 claim_ids: asStringArray(evidence.claim_ids),
-                excerpt: asString(evidence.excerpt, source.excerpt),
-                published_date: asOptionalString(evidence.published_date) ?? source.published_date,
-                accessed_date: asOptionalString(evidence.accessed_date) ?? source.accessed_date,
                 source_type: asString(evidence.source_type, source.source_type),
                 stance: asEnum(evidence.stance, STANCES, "neutral"),
                 relevance: asEnum(evidence.relevance, RELEVANCES, "medium"),
@@ -416,6 +416,17 @@ export const normalizeAnalysis = (
     };
 };
 
+// Verdicts that assert something about reality and therefore must cite evidence.
+const EVIDENCE_REQUIRED_VERDICTS: VerdictLabel[] = [
+    "confirmed",
+    "refuted",
+    "partially_confirmed",
+    "misleading_or_out_of_context",
+];
+
+const NO_EVIDENCE_LIMITATION =
+    "Verdict ramené à « non vérifiable » : aucune preuve récupérée n'a été citée pour l'étayer.";
+
 export const normalizeClaimVerdicts = (
     value: unknown,
     claims: Claim[],
@@ -432,13 +443,34 @@ export const normalizeClaimVerdicts = (
             if (!claimIds.has(claimId) || byClaim.has(claimId)) {
                 return;
             }
+            const label = asEnum(verdict.verdict, VERDICTS, "unverifiable");
+            const evidenceIds = asStringArray(verdict.evidence_ids).filter((id) =>
+                sourceIds.has(id),
+            );
+            const explanation = asString(verdict.explanation);
+            const limitations = asStringArray(verdict.limitations);
+
+            if (EVIDENCE_REQUIRED_VERDICTS.includes(label) && evidenceIds.length === 0) {
+                byClaim.set(claimId, {
+                    claim_id: claimId,
+                    verdict: "unverifiable",
+                    explanation: `Verdict initial « ${label} » non retenu faute de preuve citée.${
+                        explanation ? ` Analyse non étayée du modèle : ${explanation}` : ""
+                    }`,
+                    confidence: "low",
+                    evidence_ids: [],
+                    limitations: [NO_EVIDENCE_LIMITATION, ...limitations],
+                });
+                return;
+            }
+
             byClaim.set(claimId, {
                 claim_id: claimId,
-                verdict: asEnum(verdict.verdict, VERDICTS, "unverifiable"),
-                explanation: asString(verdict.explanation),
+                verdict: label,
+                explanation,
                 confidence: asEnum(verdict.confidence, CONFIDENCES, "low"),
-                evidence_ids: asStringArray(verdict.evidence_ids).filter((id) => sourceIds.has(id)),
-                limitations: asStringArray(verdict.limitations),
+                evidence_ids: evidenceIds,
+                limitations,
             });
         });
     }
@@ -464,13 +496,40 @@ export const normalizeOverallVerdict = (
     const overall = asRecord(value);
     const sourceIds = new Set(evidence.map((item) => item.source_id));
     const central = verdicts.find((verdict) => verdict.verdict !== "opinion_or_non_factual");
+    const label = asEnum(overall.label, VERDICTS, central?.verdict ?? "unverifiable");
+    const keyEvidenceIds = asStringArray(overall.key_evidence_ids).filter((id) =>
+        sourceIds.has(id),
+    );
+    const limitations = asStringArray(overall.limitations);
+
+    // The overall verdict needs its own cited evidence, or at least one claim
+    // verdict that survived the evidence check above with cited evidence.
+    const isBacked =
+        keyEvidenceIds.length > 0 ||
+        verdicts.some(
+            (verdict) =>
+                EVIDENCE_REQUIRED_VERDICTS.includes(verdict.verdict) &&
+                verdict.evidence_ids.length > 0,
+        );
+
+    if (EVIDENCE_REQUIRED_VERDICTS.includes(label) && !isBacked) {
+        return {
+            label: "unverifiable",
+            summary:
+                "Les preuves récupérées ne permettent pas de conclure : aucune source citée n'étaye un verdict.",
+            confidence: "low",
+            confidence_rationale: `Verdict initial « ${label} » non retenu faute de preuve citée.`,
+            key_evidence_ids: [],
+            limitations: [NO_EVIDENCE_LIMITATION, ...limitations],
+        };
+    }
 
     return {
-        label: asEnum(overall.label, VERDICTS, central?.verdict ?? "unverifiable"),
+        label,
         summary: asString(overall.summary),
         confidence: asEnum(overall.confidence, CONFIDENCES, "low"),
         confidence_rationale: asString(overall.confidence_rationale),
-        key_evidence_ids: asStringArray(overall.key_evidence_ids).filter((id) => sourceIds.has(id)),
-        limitations: asStringArray(overall.limitations),
+        key_evidence_ids: keyEvidenceIds,
+        limitations,
     };
 };

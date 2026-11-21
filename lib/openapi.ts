@@ -12,6 +12,98 @@ const errorResponse = (description = "Erreur interne du serveur") =>
 const bearer = [{ bearerAuth: [] }];
 const nextauth = [{ cookieAuth: [] }];
 
+// Exemples sélectionnables dans Swagger UI (menu « Examples »).
+// Les scénarios reprennent PRODUCT_SCOPE.md §5. Les URL de médias sont des
+// espaces réservés : le serveur ne les télécharge pas, seules les métadonnées
+// sont transmises à l'IA.
+const contextDetectorExamples = {
+    texte_simple: {
+        summary: "Texte collé (forme courte, content = chaîne)",
+        value: {
+            content:
+                "Une nouvelle loi interdit l'utilisation du téléphone portable au volant à l'arrêt dès demain en France.",
+        },
+    },
+    scenario_1_fausse_loi: {
+        summary: "Scénario démo 1 — fausse loi virale",
+        value: {
+            content: {
+                type: "text",
+                text: "URGENT : à partir de demain, une nouvelle loi interdit de payer en espèces au-delà de 10 € dans tous les commerces en France. Partagez avant que ce soit supprimé !",
+            },
+            options: { language: "fr" },
+        },
+    },
+    scenario_2_video_recyclee: {
+        summary: "Scénario démo 2 — vidéo recyclée présentée comme actuelle",
+        value: {
+            content: {
+                type: "mixed",
+                text: "Images filmées ce matin : des inondations ravagent le centre-ville de Valence.",
+                media: [
+                    {
+                        type: "video",
+                        url: "https://example.org/video-inondation.mp4",
+                        name: "video-inondation.mp4",
+                        mimeType: "video/mp4",
+                    },
+                ],
+            },
+            options: { language: "fr" },
+        },
+    },
+    scenario_3_image_sans_source: {
+        summary: "Scénario démo 3 — image sans source, soupçon d'IA",
+        value: {
+            content: {
+                type: "mixed",
+                text: "Photo du pape en doudoune blanche lors d'une sortie à Rome.",
+                media: [
+                    {
+                        type: "image",
+                        url: "https://example.org/photo.jpg",
+                        name: "photo.jpg",
+                        mimeType: "image/jpeg",
+                    },
+                ],
+            },
+            options: { language: "fr" },
+        },
+    },
+    url_publication: {
+        summary: "Lien vers une publication (l'URL n'est pas téléchargée)",
+        value: {
+            content: {
+                type: "url",
+                url: "https://example.org/article-viral",
+                text: "Titre partagé : « Le gouvernement supprime le bac en 2027 ».",
+            },
+            options: { language: "fr" },
+        },
+    },
+    sans_recherche_web: {
+        summary: "Test rapide sans recherche web (skipSearch)",
+        value: {
+            content: "La tour Eiffel mesure 330 mètres depuis l'ajout d'une nouvelle antenne en 2022.",
+            options: { language: "fr", skipSearch: true, includeReport: true },
+        },
+    },
+    erreur_400_contenu_vide: {
+        summary: "Erreur attendue — contenu vide (400)",
+        value: { content: "   " },
+    },
+};
+
+const contextDetectorRequestBody = {
+    required: true,
+    content: {
+        "application/json": {
+            schema: ref("ContextDetectorRequest"),
+            examples: contextDetectorExamples,
+        },
+    },
+};
+
 export const openApiDocument = {
     openapi: "3.0.3",
     info: {
@@ -149,11 +241,17 @@ export const openApiDocument = {
             post: {
                 tags: ["bot"],
                 operationId: "botRecommendation",
-                summary: "Obtenir une recommandation de l'assistant IA",
+                summary: "Obtenir une recommandation de l'assistant IA (hérité, non fonctionnel)",
+                description:
+                    "Chatbot hérité de l'ancienne boutique, hors périmètre MiCheck. Non fonctionnel dans ce dépôt : `@langchain/*` n'est pas installé et `@/data/prompt-data` est absent. Utiliser /api/context-detector/* pour le bot de vérification.",
+                deprecated: true,
                 requestBody: {
                     required: true,
                     content: {
-                        "application/json": { schema: ref("BotRequest") },
+                        "application/json": {
+                            schema: ref("BotRequest"),
+                            example: { prompt: "Quel produit me conseillez-vous pour un cadeau ?" },
+                        },
                     },
                 },
                 responses: {
@@ -181,13 +279,8 @@ export const openApiDocument = {
                 operationId: "extractContextDetectorClaims",
                 summary: "Décomposer un contenu en affirmations vérifiables",
                 description:
-                    "Première étape du pipeline : ne produit ni preuve ni verdict. Nécessite CONTEXT_DETECTOR_AI_API_KEY.",
-                requestBody: {
-                    required: true,
-                    content: {
-                        "application/json": { schema: ref("ContextDetectorRequest") },
-                    },
-                },
+                    "Première étape du pipeline : ne produit ni preuve ni verdict (1 appel IA, aucune recherche web). Nécessite CONTEXT_DETECTOR_AI_API_KEY. Le résultat n'est pas stocké.",
+                requestBody: contextDetectorRequestBody,
                 responses: {
                     200: response("Affirmations extraites", ref("ContextDetectorClaimsResponse")),
                     400: response("Contenu invalide", ref("Message")),
@@ -203,13 +296,8 @@ export const openApiDocument = {
                 operationId: "runContextDetectorInvestigation",
                 summary: "Lancer une investigation complète et produire un dossier sourcé",
                 description:
-                    "Pipeline : extraction des affirmations > plan de recherche > recherche web (si configurée) > évaluation des sources, contradictions et chronologie > verdicts nuancés > dossier Markdown. Les URL citées proviennent exclusivement des résultats de recherche réellement récupérés : aucune citation n'est inventée. Sans preuve exploitable, les verdicts sont `unverifiable`.",
-                requestBody: {
-                    required: true,
-                    content: {
-                        "application/json": { schema: ref("ContextDetectorRequest") },
-                    },
-                },
+                    "Pipeline : extraction des affirmations > plan de recherche > recherche web (si configurée) > évaluation des sources, contradictions et chronologie > verdicts nuancés > dossier Markdown. 2 appels IA + recherche web : compter 10 à 60 s. L'URL, le titre, l'éditeur, l'extrait et les dates de chaque preuve proviennent exclusivement des résultats de recherche réellement récupérés, jamais de l'IA. Un verdict `confirmed`, `refuted`, `partially_confirmed` ou `misleading_or_out_of_context` sans preuve citée est ramené côté serveur à `unverifiable` (confiance `low`). Les URL et médias soumis ne sont pas téléchargés. Le dossier est conservé 30 min en mémoire.",
+                requestBody: contextDetectorRequestBody,
                 responses: {
                     201: response("Dossier de vérification", ref("ContextDetectorInvestigationResponse")),
                     400: response("Contenu invalide", ref("Message")),
@@ -231,8 +319,10 @@ export const openApiDocument = {
                         name: "id",
                         in: "path",
                         required: true,
-                        description: "Identifiant retourné par /api/context-detector/investigate",
+                        description:
+                            "Identifiant `investigation_id` retourné par POST /api/context-detector/investigate (perdu après 30 min ou au redémarrage du serveur)",
                         schema: { type: "string", format: "uuid" },
+                        example: "3f2b8c1e-7a4d-4e9b-9c55-1d2e3f4a5b6c",
                     },
                 ],
                 responses: {
