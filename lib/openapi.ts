@@ -30,6 +30,11 @@ export const openApiDocument = {
         { name: "payments", description: "Paiements et transactions" },
         { name: "admin", description: "Administration" },
         { name: "bot", description: "Assistant IA" },
+        {
+            name: "context-detector",
+            description:
+                "Bot d'investigation : extraction d'affirmations, recherche de preuves, chronologie, verdicts nuancés et dossier sourcé.",
+        },
     ],
     paths: {
         "/api/docs": {
@@ -154,6 +159,85 @@ export const openApiDocument = {
                 responses: {
                     201: response("Réponse de l'assistant", ref("BotResponse")),
                     404: response("Prompt ou réponse absent", ref("Message")),
+                    500: errorResponse(),
+                },
+            },
+        },
+        "/api/context-detector/skills": {
+            get: {
+                tags: ["public", "context-detector"],
+                operationId: "listContextDetectorSkills",
+                summary: "Lister les skills disponibles du détecteur de contexte",
+                description:
+                    "Chaque skill correspond à une étape du pipeline : extraction, recherche, évaluation des sources, contradiction, chronologie, verdicts et dossier. Les skills qui nécessitent un outil ne sont actifs que si cet outil est configuré côté serveur.",
+                responses: {
+                    200: response("Skills disponibles", ref("ContextDetectorSkillsResponse")),
+                },
+            },
+        },
+        "/api/context-detector/claims": {
+            post: {
+                tags: ["public", "context-detector"],
+                operationId: "extractContextDetectorClaims",
+                summary: "Décomposer un contenu en affirmations vérifiables",
+                description:
+                    "Première étape du pipeline : ne produit ni preuve ni verdict. Nécessite CONTEXT_DETECTOR_AI_API_KEY.",
+                requestBody: {
+                    required: true,
+                    content: {
+                        "application/json": { schema: ref("ContextDetectorRequest") },
+                    },
+                },
+                responses: {
+                    200: response("Affirmations extraites", ref("ContextDetectorClaimsResponse")),
+                    400: response("Contenu invalide", ref("Message")),
+                    502: errorResponse("Fournisseur IA indisponible"),
+                    503: errorResponse("IA non configurée"),
+                    500: errorResponse(),
+                },
+            },
+        },
+        "/api/context-detector/investigate": {
+            post: {
+                tags: ["public", "context-detector"],
+                operationId: "runContextDetectorInvestigation",
+                summary: "Lancer une investigation complète et produire un dossier sourcé",
+                description:
+                    "Pipeline : extraction des affirmations > plan de recherche > recherche web (si configurée) > évaluation des sources, contradictions et chronologie > verdicts nuancés > dossier Markdown. Les URL citées proviennent exclusivement des résultats de recherche réellement récupérés : aucune citation n'est inventée. Sans preuve exploitable, les verdicts sont `unverifiable`.",
+                requestBody: {
+                    required: true,
+                    content: {
+                        "application/json": { schema: ref("ContextDetectorRequest") },
+                    },
+                },
+                responses: {
+                    201: response("Dossier de vérification", ref("ContextDetectorInvestigationResponse")),
+                    400: response("Contenu invalide", ref("Message")),
+                    502: errorResponse("Fournisseur IA indisponible"),
+                    503: errorResponse("IA non configurée"),
+                    500: errorResponse(),
+                },
+            },
+        },
+        "/api/context-detector/investigations/{id}": {
+            get: {
+                tags: ["public", "context-detector"],
+                operationId: "getContextDetectorInvestigation",
+                summary: "Récupérer un dossier par son identifiant",
+                description:
+                    "Les dossiers sont conservés en mémoire pendant 30 minutes dans cette implémentation.",
+                parameters: [
+                    {
+                        name: "id",
+                        in: "path",
+                        required: true,
+                        description: "Identifiant retourné par /api/context-detector/investigate",
+                        schema: { type: "string", format: "uuid" },
+                    },
+                ],
+                responses: {
+                    200: response("Dossier de vérification", ref("ContextDetectorInvestigationResponse")),
+                    404: response("Investigation introuvable", ref("Message")),
                     500: errorResponse(),
                 },
             },
@@ -646,6 +730,262 @@ export const openApiDocument = {
                     adminFacial: { type: "object", nullable: true },
                     createdAt: { type: "string", format: "date-time" },
                     updatedAt: { type: "string", format: "date-time" },
+                },
+            },
+            ContextDetectorMediaInput: {
+                type: "object",
+                required: ["type"],
+                properties: {
+                    type: { type: "string", enum: ["image", "video", "document"] },
+                    url: { type: "string", format: "uri" },
+                    dataUrl: { type: "string", description: "Média encodé en base64" },
+                    name: { type: "string" },
+                    mimeType: { type: "string" },
+                },
+            },
+            ContextDetectorRequest: {
+                type: "object",
+                required: ["content"],
+                properties: {
+                    content: {
+                        oneOf: [
+                            { type: "string", description: "Texte ou publication collée" },
+                            {
+                                type: "object",
+                                properties: {
+                                    type: {
+                                        type: "string",
+                                        enum: ["text", "url", "image", "video", "document", "mixed"],
+                                    },
+                                    text: { type: "string" },
+                                    url: { type: "string", format: "uri" },
+                                    media: {
+                                        type: "array",
+                                        items: ref("ContextDetectorMediaInput"),
+                                    },
+                                },
+                            },
+                        ],
+                    },
+                    options: {
+                        type: "object",
+                        properties: {
+                            language: { type: "string", example: "fr" },
+                            skills: {
+                                type: "array",
+                                items: { type: "string" },
+                                description: "Identifiants des skills à exécuter",
+                            },
+                            investigationDate: { type: "string", format: "date-time" },
+                            includeReport: { type: "boolean", default: true },
+                            skipSearch: { type: "boolean", default: false },
+                        },
+                    },
+                },
+            },
+            ContextDetectorSkill: {
+                type: "object",
+                required: ["id", "name", "description", "trigger", "outputKey", "phase", "inputTypes"],
+                properties: {
+                    id: { type: "string" },
+                    name: { type: "string" },
+                    description: { type: "string" },
+                    trigger: { type: "string" },
+                    outputKey: { type: "string" },
+                    phase: {
+                        type: "string",
+                        enum: ["preparation", "investigation", "analysis", "reporting"],
+                    },
+                    inputTypes: {
+                        type: "array",
+                        items: {
+                            type: "string",
+                            enum: ["text", "url", "image", "video", "document", "mixed"],
+                        },
+                    },
+                    requiresTool: { type: "string", nullable: true },
+                },
+            },
+            ContextDetectorSkillsResponse: {
+                type: "object",
+                required: ["count", "skills", "note"],
+                properties: {
+                    count: { type: "integer" },
+                    skills: { type: "array", items: ref("ContextDetectorSkill") },
+                    note: { type: "string" },
+                },
+            },
+            ContextDetectorClaim: {
+                type: "object",
+                required: ["id", "claim_text", "claim_type", "importance", "checkability"],
+                properties: {
+                    id: { type: "string", example: "C1" },
+                    claim_text: { type: "string" },
+                    claim_type: {
+                        type: "string",
+                        enum: [
+                            "event",
+                            "policy_legal",
+                            "statistic",
+                            "quote",
+                            "identity_allegation",
+                            "science_health",
+                            "causal",
+                            "historical",
+                            "other",
+                        ],
+                    },
+                    importance: { type: "string", enum: ["high", "medium", "low"] },
+                    entities: { type: "array", items: { type: "string" } },
+                    date_or_period: { type: "string" },
+                    location: { type: "string" },
+                    verification_question: { type: "string" },
+                    ambiguities: { type: "array", items: { type: "string" } },
+                    checkability: {
+                        type: "string",
+                        enum: [
+                            "verifiable",
+                            "partially_verifiable",
+                            "not_verifiable",
+                            "opinion_or_prediction",
+                        ],
+                    },
+                },
+            },
+            ContextDetectorClaimsResponse: {
+                type: "object",
+                required: ["input_type", "input_summary", "language", "investigation_date", "claims"],
+                properties: {
+                    input_type: {
+                        type: "string",
+                        enum: ["text", "url", "image", "video", "document", "mixed"],
+                    },
+                    input_summary: { type: "string" },
+                    language: { type: "string" },
+                    investigation_date: { type: "string", format: "date-time" },
+                    claims: { type: "array", items: ref("ContextDetectorClaim") },
+                },
+            },
+            ContextDetectorEvidence: {
+                type: "object",
+                required: ["source_id", "claim_ids", "url", "title", "accessed_date", "excerpt"],
+                properties: {
+                    source_id: { type: "string", example: "S1" },
+                    claim_ids: { type: "array", items: { type: "string" } },
+                    url: { type: "string", format: "uri" },
+                    title: { type: "string" },
+                    publisher: { type: "string" },
+                    published_date: { type: "string" },
+                    accessed_date: { type: "string", format: "date-time" },
+                    source_type: { type: "string" },
+                    excerpt: { type: "string" },
+                    stance: {
+                        type: "string",
+                        enum: ["supports", "contradicts", "contextualizes", "neutral"],
+                    },
+                    relevance: { type: "string", enum: ["high", "medium", "low"] },
+                    retrieval_notes: { type: "string" },
+                },
+            },
+            ContextDetectorVerdict: {
+                type: "object",
+                required: ["label", "summary", "confidence", "confidence_rationale"],
+                properties: {
+                    label: {
+                        type: "string",
+                        enum: [
+                            "confirmed",
+                            "refuted",
+                            "misleading_or_out_of_context",
+                            "unverifiable",
+                            "partially_confirmed",
+                            "opinion_or_non_factual",
+                        ],
+                    },
+                    summary: { type: "string" },
+                    confidence: { type: "string", enum: ["low", "medium", "high"] },
+                    confidence_rationale: { type: "string" },
+                    key_evidence_ids: { type: "array", items: { type: "string" } },
+                    limitations: { type: "array", items: { type: "string" } },
+                },
+            },
+            ContextDetectorDossier: {
+                type: "object",
+                required: [
+                    "investigation_id",
+                    "input_type",
+                    "investigation_date",
+                    "skills_used",
+                    "claims",
+                    "claim_verdicts",
+                    "overall_verdict",
+                    "sources",
+                ],
+                properties: {
+                    investigation_id: { type: "string", format: "uuid" },
+                    input_summary: { type: "string" },
+                    input_type: {
+                        type: "string",
+                        enum: ["text", "url", "image", "video", "document", "mixed"],
+                    },
+                    language: { type: "string" },
+                    investigation_date: { type: "string", format: "date-time" },
+                    skills_used: { type: "array", items: { type: "string" } },
+                    claims: { type: "array", items: ref("ContextDetectorClaim") },
+                    evidence: { type: "array", items: ref("ContextDetectorEvidence") },
+                    claim_verdicts: {
+                        type: "array",
+                        items: {
+                            type: "object",
+                            properties: {
+                                claim_id: { type: "string" },
+                                verdict: {
+                                    type: "string",
+                                    enum: [
+                                        "confirmed",
+                                        "refuted",
+                                        "misleading_or_out_of_context",
+                                        "unverifiable",
+                                        "partially_confirmed",
+                                        "opinion_or_non_factual",
+                                    ],
+                                },
+                                explanation: { type: "string" },
+                                confidence: { type: "string", enum: ["low", "medium", "high"] },
+                                evidence_ids: { type: "array", items: { type: "string" } },
+                                limitations: { type: "array", items: { type: "string" } },
+                            },
+                        },
+                    },
+                    overall_verdict: ref("ContextDetectorVerdict"),
+                    sources: {
+                        type: "array",
+                        items: {
+                            type: "object",
+                            required: ["source_id", "url", "title", "accessed_date"],
+                            properties: {
+                                source_id: { type: "string" },
+                                url: { type: "string", format: "uri" },
+                                title: { type: "string" },
+                                publisher: { type: "string" },
+                                published_date: { type: "string" },
+                                accessed_date: { type: "string", format: "date-time" },
+                            },
+                        },
+                    },
+                    practical_takeaway: { type: "string" },
+                    limitations: { type: "array", items: { type: "string" } },
+                },
+                description:
+                    "Les champs optionnels (search_plan, source_assessments, contradictions, timeline, context_findings, media_findings, video_findings, quote_findings, framing_findings, evidence_gaps) sont présents uniquement lorsque le skill correspondant a été exécuté.",
+            },
+            ContextDetectorInvestigationResponse: {
+                type: "object",
+                required: ["investigation_id", "dossier"],
+                properties: {
+                    investigation_id: { type: "string", format: "uuid" },
+                    dossier: ref("ContextDetectorDossier"),
+                    report: { type: "string", description: "Dossier Markdown prêt à afficher" },
                 },
             },
         },
