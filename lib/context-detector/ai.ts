@@ -1,3 +1,10 @@
+import {
+    getLocalModelName,
+    isLocalFallbackEnabled,
+    requestLocalJson,
+} from "@/lib/context-detector/local-llm";
+import { AiAttempt, AiProviderInfo, AiStep } from "@/lib/context-detector/types";
+
 export class ContextDetectorConfigurationError extends Error {
     readonly code = "CONFIGURATION_MISSING";
 }
@@ -5,6 +12,39 @@ export class ContextDetectorConfigurationError extends Error {
 export class ContextDetectorAiError extends Error {
     readonly code = "AI_PROVIDER_ERROR";
 }
+
+// HTTP failure from a remote provider, kept typed so limits can be detected.
+class ProviderHttpError extends Error {
+    readonly status: number;
+    readonly retryAfterMs?: number;
+
+    constructor(status: number, retryAfterMs?: number) {
+        super(`HTTP ${status}`);
+        this.status = status;
+        this.retryAfterMs = retryAfterMs;
+    }
+}
+
+const parseRetryAfter = (header: string | null): number | undefined => {
+    if (!header) {
+        return undefined;
+    }
+    const seconds = Number(header);
+    if (Number.isFinite(seconds) && seconds >= 0) {
+        return seconds * 1000;
+    }
+    const date = Date.parse(header);
+    return Number.isNaN(date) ? undefined : Math.max(0, date - Date.now());
+};
+
+const throwIfNotOk = (response: Response): void => {
+    if (!response.ok) {
+        throw new ProviderHttpError(
+            response.status,
+            parseRetryAfter(response.headers.get("retry-after")),
+        );
+    }
+};
 
 type AiProviderId = "groq" | "xai" | "mistral" | "gemini" | "huggingface";
 
@@ -111,7 +151,8 @@ export const getAiProviders = (): AiProvider[] =>
         .map((id) => buildProvider(id))
         .filter((provider): provider is AiProvider => Boolean(provider));
 
-export const isAiConfigured = (): boolean => getAiProviders().length > 0;
+export const isAiConfigured = (): boolean =>
+    getAiProviders().length > 0 || isLocalFallbackEnabled();
 
 export const getAiModel = (): string =>
     getAiProviders()[0]?.model ?? "llama-3.3-70b-versatile";
@@ -169,9 +210,7 @@ const requestOpenAiCompatible = async (
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(60000),
     });
-    if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-    }
+    throwIfNotOk(response);
 
     const payload = (await response.json()) as {
         choices?: { message?: { content?: unknown } }[];
@@ -205,9 +244,7 @@ const requestGemini = async (
             signal: AbortSignal.timeout(60000),
         },
     );
-    if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-    }
+    throwIfNotOk(response);
 
     const payload = (await response.json()) as {
         candidates?: { content?: { parts?: { text?: unknown }[] } }[];
@@ -232,30 +269,125 @@ const requestContent = (
         ? requestGemini(provider, systemPrompt, userPrompt)
         : requestOpenAiCompatible(provider, systemPrompt, userPrompt);
 
+// --- Fallback chain -----------------------------------------------------------
+// Remote providers in the configured order, then the local model (opt-in).
+// A provider that hit its rate limit, or whose key was refused, is skipped for a
+// while instead of being called again on every request.
+
+const RATE_LIMIT_COOLDOWN_MS = 60 * 1000;
+const MAX_RATE_LIMIT_COOLDOWN_MS = 10 * 60 * 1000;
+const AUTH_COOLDOWN_MS = 5 * 60 * 1000;
+const cooldowns = new Map<AiProviderId, number>();
+
+const describeFailure = (error: unknown): { reason: string; cooldownMs?: number } => {
+    if (error instanceof ProviderHttpError) {
+        if (error.status === 429) {
+            return {
+                reason: "limite de requêtes atteinte (HTTP 429)",
+                cooldownMs: Math.min(
+                    error.retryAfterMs ?? RATE_LIMIT_COOLDOWN_MS,
+                    MAX_RATE_LIMIT_COOLDOWN_MS,
+                ),
+            };
+        }
+        if (error.status === 401 || error.status === 403) {
+            return {
+                reason: `clé refusée (HTTP ${error.status})`,
+                cooldownMs: AUTH_COOLDOWN_MS,
+            };
+        }
+        if (error.status === 402) {
+            return { reason: "quota ou crédit épuisé (HTTP 402)", cooldownMs: AUTH_COOLDOWN_MS };
+        }
+        return { reason: `erreur du fournisseur (HTTP ${error.status})` };
+    }
+    if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
+        return { reason: "délai dépassé" };
+    }
+    return { reason: error instanceof Error ? error.message : String(error) };
+};
+
+export interface StructuredJsonResult {
+    data: Record<string, unknown>;
+    provider: AiProviderInfo;
+}
+
 export const requestStructuredJson = async (
     systemPrompt: string,
     userPrompt: string,
-): Promise<Record<string, unknown>> => {
+    step: AiStep,
+): Promise<StructuredJsonResult> => {
     const providers = getAiProviders();
-    if (providers.length === 0) {
+    const localEnabled = isLocalFallbackEnabled();
+    if (providers.length === 0 && !localEnabled) {
         throw new ContextDetectorConfigurationError(
-            "Aucune clé IA configurée (CONTEXT_DETECTOR_*_API_KEY).",
+            "Aucun fournisseur IA configuré : ajoutez une clé CONTEXT_DETECTOR_*_API_KEY ou activez CONTEXT_DETECTOR_LOCAL_FALLBACK.",
         );
     }
 
-    const failures: string[] = [];
+    const attempts: AiAttempt[] = [];
     for (const provider of providers) {
+        const blockedUntil = cooldowns.get(provider.id) ?? 0;
+        if (blockedUntil > Date.now()) {
+            attempts.push({
+                provider: provider.id,
+                outcome: "skipped",
+                reason: `en pause après une limite ou un refus, nouvel essai dans ${Math.ceil(
+                    (blockedUntil - Date.now()) / 1000,
+                )} s`,
+            });
+            continue;
+        }
+
         try {
             const content = await requestContent(provider, systemPrompt, userPrompt);
-            return extractJsonObject(content);
+            const data = extractJsonObject(content);
+            cooldowns.delete(provider.id);
+            return {
+                data,
+                provider: {
+                    id: provider.id,
+                    label: provider.label,
+                    model: provider.model,
+                    kind: "remote",
+                    indicative: false,
+                    attempts,
+                },
+            };
         } catch (error) {
-            const reason = error instanceof Error ? error.message : String(error);
-            failures.push(`${provider.id}: ${reason}`);
-            console.error("Context Detector AI provider failed:", provider.id, reason);
+            const { reason, cooldownMs } = describeFailure(error);
+            if (cooldownMs) {
+                cooldowns.set(provider.id, Date.now() + cooldownMs);
+            }
+            attempts.push({ provider: provider.id, outcome: "failed", reason });
+            console.error("Context Detector AI provider failed:", provider.id, step, reason);
+        }
+    }
+
+    if (localEnabled) {
+        try {
+            const data = await requestLocalJson(systemPrompt, userPrompt, step);
+            return {
+                data,
+                provider: {
+                    id: "local",
+                    label: "Modèle local (node-llama-cpp)",
+                    model: getLocalModelName(),
+                    kind: "local",
+                    indicative: true,
+                    attempts,
+                },
+            };
+        } catch (error) {
+            const { reason } = describeFailure(error);
+            attempts.push({ provider: "local", outcome: "failed", reason });
+            console.error("Context Detector local model failed:", step, reason);
         }
     }
 
     throw new ContextDetectorAiError(
-        `Tous les fournisseurs IA ont échoué (${failures.join(" | ")}).`,
+        `Tous les fournisseurs IA ont échoué (${attempts
+            .map((attempt) => `${attempt.provider}: ${attempt.reason}`)
+            .join(" | ")}).`,
     );
 };

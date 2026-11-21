@@ -416,6 +416,25 @@ export const normalizeAnalysis = (
     };
 };
 
+export const INDICATIVE_LIMITATION =
+    "Résultat indicatif : produit par le modèle local de secours, moins fiable que les fournisseurs IA en ligne. La confiance est plafonnée à « faible » ; refaites la vérification quand un fournisseur en ligne est disponible.";
+
+// Local-model results (docs/adr-local-fallback.md) keep their verdict label but
+// their confidence is capped at "low" and each verdict carries the limitation.
+export const applyIndicativeMode = <T extends { confidence: Confidence; limitations: string[] }>(
+    verdicts: T[],
+    indicative: boolean,
+): { verdicts: T[]; limitation: string } => ({
+    verdicts: indicative
+        ? verdicts.map((verdict) => ({
+              ...verdict,
+              confidence: "low",
+              limitations: [INDICATIVE_LIMITATION, ...verdict.limitations],
+          }))
+        : verdicts,
+    limitation: INDICATIVE_LIMITATION,
+});
+
 // Verdicts that assert something about reality and therefore must cite evidence.
 const EVIDENCE_REQUIRED_VERDICTS: VerdictLabel[] = [
     "confirmed",

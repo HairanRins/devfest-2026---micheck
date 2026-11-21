@@ -1,6 +1,7 @@
 # ADR-001: API shape for the Content Detector
 
 - **Status:** accepted. Implemented on 2026-11-21: `POST /api/context-detector/media-signals` (`lib/context-detector/media.ts`).
+- **Amended by ADR-002** (`docs/adr-local-fallback.md`): `/media-signals` accepts an optional `ocr=true` field that runs local OCR (`tesseract.js`). It is still free and still not a verdict, and its output is marked indicative.
 - **Date:** 2026-11-21
 - **Inputs:** `PRODUCT_SCOPE.md`, `docs/audit-api.md`, `docs/api-testing.md`, `lib/context-detector/*`
 

@@ -1,4 +1,4 @@
-import { Dossier, VerdictLabel } from "@/lib/context-detector/types";
+import { AiProviderInfo, Dossier, VerdictLabel } from "@/lib/context-detector/types";
 
 export const VERDICT_LABELS_FR: Record<VerdictLabel, string> = {
     confirmed: "Confirmé",
@@ -29,6 +29,16 @@ const citation = (sourceId: string, dossier: Dossier): string => {
     return `[${sourceId} : ${source.title}${details ? ` — ${details}` : ""}](${source.url})`;
 };
 
+const describeProvider = (provider: AiProviderInfo): string =>
+    `${provider.label} (${provider.model})${provider.kind === "local" ? " — indicatif" : ""}`;
+
+const providerLine = (dossier: Dossier): string => {
+    const { extraction, analysis } = dossier.generated_by;
+    return extraction.id === analysis.id && extraction.model === analysis.model
+        ? describeProvider(analysis)
+        : `extraction : ${describeProvider(extraction)} ; analyse : ${describeProvider(analysis)}`;
+};
+
 export const renderDossierReport = (dossier: Dossier): string => {
     const sections: string[] = [];
     const overall = dossier.overall_verdict;
@@ -36,9 +46,17 @@ export const renderDossierReport = (dossier: Dossier): string => {
     sections.push(
         `## ${VERDICT_LABELS_FR[overall.label]} — dossier de vérification`,
         "",
+        ...(dossier.indicative
+            ? [
+                  "> ⚠️ **Résultat indicatif** — produit par le modèle local de secours, les fournisseurs IA en ligne étant indisponibles. Moins fiable : à revérifier.",
+                  "",
+              ]
+            : []),
         `**Résumé :** ${overall.summary || "Aucun résumé disponible."}`,
         "",
         `**Date de l'enquête :** ${dossier.investigation_date}`,
+        "",
+        `**Fournisseur IA :** ${providerLine(dossier)}`,
         "",
         "### Ce qui a été soumis",
         "",

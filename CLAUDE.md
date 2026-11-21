@@ -47,9 +47,9 @@ Pipeline in `lib/context-detector/orchestrator.ts` (`runInvestigation`):
 5. Everything is passed through `normalize.ts` (LLM output is never trusted raw), assembled into a `Dossier`, optionally rendered to Markdown by `report.ts`.
 6. Saved in `store.ts` — an **in-memory Map with 30-min TTL** (lost on restart, not shared across instances).
 
-`ai.ts` talks to any OpenAI-compatible `/chat/completions` endpoint via plain `fetch` (default Groq, `llama-3.3-70b-versatile`) and extracts a JSON object from the response. No SDK dependencies.
+`ai.ts` is a fallback chain (`requestStructuredJson(system, user, step)` → `{ data, provider }`): remote providers in `CONTEXT_DETECTOR_AI_PROVIDERS` order (Groq, xAI, Mistral, Gemini, HF via plain `fetch`, no SDK), with a cooldown after 429/401/402/403, then an opt-in local model (`local-llm.ts`, Qwen2.5-3B via `node-llama-cpp`, `CONTEXT_DETECTOR_LOCAL_FALLBACK=on`). Every response carries `generated_by` (who answered, prior `attempts`); local results set `indicative: true` and `applyIndicativeMode` caps confidence at `low`. `ocr.ts` (`tesseract.js`) serves `media-signals?ocr=true`. The local packages are **optional**: loaded via a non-analysable dynamic import, listed in `serverExternalPackages`, installed with `npm run models:install` + `npm run models:download` — see `docs/adr-local-fallback.md`. Don't import them statically.
 
-Env vars (see `.env.example`): `CONTEXT_DETECTOR_AI_API_KEY`, `CONTEXT_DETECTOR_AI_BASE_URL`, `CONTEXT_DETECTOR_AI_MODEL`, `CONTEXT_DETECTOR_SEARCH_PROVIDER`, `CONTEXT_DETECTOR_SEARCH_API_KEY`, `CONTEXT_DETECTOR_SEARCH_URL`.
+Env vars: see `.env.example` and `docs/api-testing.md` §2 (per-provider AI keys, search providers, local fallback).
 
 ### Skills in `.agents/skills/`
 

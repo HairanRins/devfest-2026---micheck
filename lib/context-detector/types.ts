@@ -249,6 +249,8 @@ export interface Dossier {
     sources: Source[];
     practical_takeaway: string;
     limitations: string[];
+    generated_by: InvestigationProviders;
+    indicative: boolean;
 }
 
 export interface InvestigationResponse {
@@ -263,6 +265,8 @@ export interface ClaimsResponse {
     language: string;
     investigation_date: string;
     claims: Claim[];
+    generated_by: AiProviderInfo;
+    indicative: boolean;
 }
 
 export type SkillPhase =
@@ -319,4 +323,43 @@ export interface MediaSignalsResponse {
     signals: MediaSignal[];
     analyzed_at: string;
     disclaimer: string;
+    ocr?: MediaOcrResult;
+}
+
+// --- Provider layer ------------------------------------------------------------
+
+export type AiStep = "extraction" | "analysis";
+
+export type AiProviderKind = "remote" | "local";
+
+export interface AiAttempt {
+    provider: string;
+    outcome: "failed" | "skipped";
+    reason: string;
+}
+
+// Which provider produced a result. Local results are always indicative.
+export interface AiProviderInfo {
+    id: string;
+    label: string;
+    model: string;
+    kind: AiProviderKind;
+    indicative: boolean;
+    attempts: AiAttempt[];
+}
+
+export interface InvestigationProviders {
+    extraction: AiProviderInfo;
+    analysis: AiProviderInfo;
+}
+
+export type OcrQuality = "low" | "medium" | "high";
+
+export interface MediaOcrResult {
+    status: "ok" | "unavailable" | "failed";
+    text: string;
+    quality: OcrQuality | null;
+    languages: string[];
+    provider: AiProviderInfo;
+    reason?: string;
 }

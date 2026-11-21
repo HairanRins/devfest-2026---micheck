@@ -4,6 +4,7 @@ import {
     requestStructuredJson,
 } from "@/lib/context-detector/ai";
 import {
+    applyIndicativeMode,
     buildEvidencePacket,
     buildSources,
     normalizeAnalysis,
@@ -32,6 +33,9 @@ import {
 } from "@/lib/context-detector/types";
 
 const MAX_QUERIES = 6;
+
+const NO_PROVIDER_MESSAGE =
+    "Aucun fournisseur IA configuré : ajoutez une clé CONTEXT_DETECTOR_*_API_KEY ou activez CONTEXT_DETECTOR_LOCAL_FALLBACK.";
 
 const textOf = (value: unknown, fallback = ""): string =>
     typeof value === "string" ? value : fallback;
@@ -64,9 +68,7 @@ export const runClaimExtraction = async (
     request: InvestigationRequest,
 ): Promise<ClaimsResponse> => {
     if (!isAiConfigured()) {
-        throw new ContextDetectorConfigurationError(
-            "CONTEXT_DETECTOR_AI_API_KEY n'est pas configurée.",
-        );
+        throw new ContextDetectorConfigurationError(NO_PROVIDER_MESSAGE);
     }
 
     const input = request.content as InvestigationInput;
@@ -74,9 +76,10 @@ export const runClaimExtraction = async (
     const skills = selectSkills(input, options);
     const investigationDate = getDate(options);
 
-    const raw = await requestStructuredJson(
+    const { data: raw, provider } = await requestStructuredJson(
         buildExtractionSystemPrompt(skills, options.language),
         `${formatInputForPrompt(input)}\n\nDate de l'investigation : ${investigationDate}\nType d'entrée détecté : ${detectInputType(input)}`,
+        "extraction",
     );
 
     return {
@@ -85,6 +88,8 @@ export const runClaimExtraction = async (
         language: textOf(raw.language, options.language ?? "auto"),
         investigation_date: investigationDate,
         claims: normalizeClaims(raw.claims),
+        generated_by: provider,
+        indicative: provider.indicative,
     };
 };
 
@@ -92,9 +97,7 @@ export const runInvestigation = async (
     request: InvestigationRequest,
 ): Promise<InvestigationResponse> => {
     if (!isAiConfigured()) {
-        throw new ContextDetectorConfigurationError(
-            "CONTEXT_DETECTOR_AI_API_KEY n'est pas configurée.",
-        );
+        throw new ContextDetectorConfigurationError(NO_PROVIDER_MESSAGE);
     }
 
     const input = request.content as InvestigationInput;
@@ -105,9 +108,10 @@ export const runInvestigation = async (
     const skills = selectSkills(input, options, availableTools);
     const hasSkills = (id: string): boolean => skills.some((skill) => skill.id === id);
 
-    const extraction = await requestStructuredJson(
+    const { data: extraction, provider: extractionProvider } = await requestStructuredJson(
         buildExtractionSystemPrompt(skills, options.language),
         `${formatInputForPrompt(input)}\n\nDate de l'investigation : ${investigationDate}\nType d'entrée détecté : ${detectInputType(input)}`,
+        "extraction",
     );
 
     const claims = normalizeClaims(extraction.claims);
@@ -138,18 +142,28 @@ export const runInvestigation = async (
         .filter(Boolean)
         .join("\n\n");
 
-    const analysis = await requestStructuredJson(
+    const { data: analysis, provider: analysisProvider } = await requestStructuredJson(
         buildAnalysisSystemPrompt(skills, options.language),
         analysisUserMessage,
+        "analysis",
     );
 
     const evidence = normalizeEvidence(analysis.evidence, packet);
     const details = normalizeAnalysis(analysis, evidence);
-    const claimVerdicts = normalizeClaimVerdicts(analysis.claim_verdicts, claims, evidence);
-    const overallVerdict = normalizeOverallVerdict(analysis.overall_verdict, claimVerdicts, evidence);
+    const indicative = extractionProvider.indicative || analysisProvider.indicative;
+    const calibrated = applyIndicativeMode(
+        normalizeClaimVerdicts(analysis.claim_verdicts, claims, evidence),
+        indicative,
+    );
+    const claimVerdicts = calibrated.verdicts;
+    const overallVerdict = applyIndicativeMode(
+        [normalizeOverallVerdict(analysis.overall_verdict, claimVerdicts, evidence)],
+        indicative,
+    ).verdicts[0];
     const sources = buildSources(packet, evidence, overallVerdict.key_evidence_ids);
 
     const limitations = [
+        ...(indicative ? [calibrated.limitation] : []),
         searchOutcome.note,
         ...(Array.isArray(analysis.limitations)
             ? analysis.limitations.filter((item): item is string => typeof item === "string")
@@ -188,6 +202,8 @@ export const runInvestigation = async (
         sources,
         practical_takeaway: textOf(analysis.practical_takeaway),
         limitations,
+        generated_by: { extraction: extractionProvider, analysis: analysisProvider },
+        indicative,
     };
 
     const response: InvestigationResponse = {

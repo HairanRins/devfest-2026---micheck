@@ -279,7 +279,7 @@ export const openApiDocument = {
                 operationId: "extractContextDetectorClaims",
                 summary: "Décomposer un contenu en affirmations vérifiables",
                 description:
-                    "Première étape du pipeline : ne produit ni preuve ni verdict (1 appel IA, aucune recherche web). Nécessite au moins une clé IA (Groq, xAI, Mistral, Gemini ou Hugging Face) ; les fournisseurs sont essayés en cascade selon CONTEXT_DETECTOR_AI_PROVIDERS. Le résultat n'est pas stocké.",
+                    "Première étape du pipeline : ne produit ni preuve ni verdict (1 appel IA, aucune recherche web). Nécessite au moins une clé IA (Groq, xAI, Mistral, Gemini ou Hugging Face) ; les fournisseurs sont essayés en cascade selon CONTEXT_DETECTOR_AI_PROVIDERS. Si tous les fournisseurs en ligne échouent (limite 429, clé refusée, erreur, délai), un modèle local de secours (Qwen2.5-3B via node-llama-cpp) répond si CONTEXT_DETECTOR_LOCAL_FALLBACK=on ; le résultat est alors marqué `indicative: true` et ses confiances sont plafonnées à `low`. Le champ `generated_by` indique quel fournisseur a répondu et les tentatives précédentes. Le résultat n'est pas stocké.",
                 requestBody: contextDetectorRequestBody,
                 responses: {
                     200: response("Affirmations extraites", ref("ContextDetectorClaimsResponse")),
@@ -296,7 +296,7 @@ export const openApiDocument = {
                 operationId: "runContextDetectorInvestigation",
                 summary: "Lancer une investigation complète et produire un dossier sourcé",
                 description:
-                    "Pipeline : extraction des affirmations > plan de recherche > recherche web (si configurée : Tavily, avec repli Brave ou générique selon CONTEXT_DETECTOR_SEARCH_PROVIDERS) > évaluation des sources, contradictions et chronologie > verdicts nuancés > dossier Markdown. Les fournisseurs IA (Groq, xAI, Mistral, Gemini, Hugging Face) sont essayés en cascade. 2 appels IA + recherche web : compter 10 à 60 s. L'URL, le titre, l'éditeur, l'extrait et les dates de chaque preuve proviennent exclusivement des résultats de recherche réellement récupérés, jamais de l'IA. Un verdict `confirmed`, `refuted`, `partially_confirmed` ou `misleading_or_out_of_context` sans preuve citée est ramené côté serveur à `unverifiable` (confiance `low`). Les URL et médias soumis ne sont pas téléchargés. Le dossier est conservé 30 min en mémoire.",
+                    "Pipeline : extraction des affirmations > plan de recherche > recherche web (si configurée : Tavily, avec repli Brave ou générique selon CONTEXT_DETECTOR_SEARCH_PROVIDERS) > évaluation des sources, contradictions et chronologie > verdicts nuancés > dossier Markdown. Les fournisseurs IA (Groq, xAI, Mistral, Gemini, Hugging Face) sont essayés en cascade. Si tous les fournisseurs en ligne échouent (limite 429, clé refusée, erreur, délai), un modèle local de secours (Qwen2.5-3B via node-llama-cpp) répond si CONTEXT_DETECTOR_LOCAL_FALLBACK=on ; le résultat est alors marqué `indicative: true` et ses confiances sont plafonnées à `low`. Le champ `generated_by` indique quel fournisseur a répondu et les tentatives précédentes. Le modèle local est lent sur CPU (plusieurs minutes). 2 appels IA + recherche web : compter 10 à 60 s. L'URL, le titre, l'éditeur, l'extrait et les dates de chaque preuve proviennent exclusivement des résultats de recherche réellement récupérés, jamais de l'IA. Un verdict `confirmed`, `refuted`, `partially_confirmed` ou `misleading_or_out_of_context` sans preuve citée est ramené côté serveur à `unverifiable` (confiance `low`). Les URL et médias soumis ne sont pas téléchargés. Le dossier est conservé 30 min en mémoire.",
                 requestBody: contextDetectorRequestBody,
                 responses: {
                     201: response("Dossier de vérification", ref("ContextDetectorInvestigationResponse")),
@@ -338,7 +338,7 @@ export const openApiDocument = {
                 operationId: "getContextDetectorMediaSignals",
                 summary: "Lire les signaux techniques d'une image (indices, jamais un verdict)",
                 description:
-                    "Analyse locale, sans appel IA ni coût : format réel (vérifié sur les octets), dimensions, EXIF (appareil, logiciel, dates), présence de GPS (coordonnées jamais renvoyées), marqueurs de provenance (C2PA, IPTC DigitalSourceType, paramètres de générateurs). Limites : 1 fichier dans le champ `file`, 4 Mo maximum, JPEG, PNG ou WebP. Le fichier est traité en mémoire et jamais stocké. Ces signaux ne prouvent pas l'authenticité et ne détectent pas les deepfakes (PRODUCT_SCOPE.md §7) ; ils ne sont pas transmis au verdict de /investigate. Dans Swagger UI, choisissez un fichier puis cliquez sur Execute.",
+                    "Analyse locale, sans appel IA en ligne ni coût. Champ optionnel `ocr=true` : extrait aussi le texte de l'image (capture d'écran d'une publication) avec l'OCR local tesseract.js (français + anglais), toujours marqué `indicative` ; ce texte peut ensuite être envoyé à /investigate. Si l'OCR n'est pas installé, la réponse reste 200 avec `ocr.status = unavailable`. Contenu : format réel (vérifié sur les octets), dimensions, EXIF (appareil, logiciel, dates), présence de GPS (coordonnées jamais renvoyées), marqueurs de provenance (C2PA, IPTC DigitalSourceType, paramètres de générateurs). Limites : 1 fichier dans le champ `file`, 4 Mo maximum, JPEG, PNG ou WebP. Le fichier est traité en mémoire et jamais stocké. Ces signaux ne prouvent pas l'authenticité et ne détectent pas les deepfakes (PRODUCT_SCOPE.md §7) ; ils ne sont pas transmis au verdict de /investigate. Dans Swagger UI, choisissez un fichier puis cliquez sur Execute.",
                 requestBody: {
                     required: true,
                     content: {
@@ -421,7 +421,7 @@ export const openApiDocument = {
                         },
                     },
                     400: response(
-                        "Requête invalide : multipart illisible, champ `file` absent ou texte, plusieurs fichiers, fichier vide",
+                        "Requête invalide : multipart illisible, champ `file` absent ou texte, plusieurs fichiers, fichier vide, champ `ocr` invalide",
                         ref("MediaSignalsError"),
                     ),
                     413: response("Fichier de plus de 4 Mo", ref("MediaSignalsError")),
@@ -1049,7 +1049,15 @@ export const openApiDocument = {
             },
             ContextDetectorClaimsResponse: {
                 type: "object",
-                required: ["input_type", "input_summary", "language", "investigation_date", "claims"],
+                required: [
+                    "input_type",
+                    "input_summary",
+                    "language",
+                    "investigation_date",
+                    "claims",
+                    "generated_by",
+                    "indicative",
+                ],
                 properties: {
                     input_type: {
                         type: "string",
@@ -1059,6 +1067,11 @@ export const openApiDocument = {
                     language: { type: "string" },
                     investigation_date: { type: "string", format: "date-time" },
                     claims: { type: "array", items: ref("ContextDetectorClaim") },
+                    generated_by: ref("AiProviderInfo"),
+                    indicative: {
+                        type: "boolean",
+                        description: "true si le modèle local de secours a répondu : résultat moins fiable",
+                    },
                 },
             },
             ContextDetectorEvidence: {
@@ -1115,6 +1128,8 @@ export const openApiDocument = {
                     "claim_verdicts",
                     "overall_verdict",
                     "sources",
+                    "generated_by",
+                    "indicative",
                 ],
                 properties: {
                     investigation_id: { type: "string", format: "uuid" },
@@ -1170,6 +1185,20 @@ export const openApiDocument = {
                     },
                     practical_takeaway: { type: "string" },
                     limitations: { type: "array", items: { type: "string" } },
+                    generated_by: {
+                        type: "object",
+                        required: ["extraction", "analysis"],
+                        description: "Fournisseur ayant répondu à chacun des 2 appels IA",
+                        properties: {
+                            extraction: ref("AiProviderInfo"),
+                            analysis: ref("AiProviderInfo"),
+                        },
+                    },
+                    indicative: {
+                        type: "boolean",
+                        description:
+                            "true si au moins une étape a été produite par le modèle local de secours : confiances plafonnées à `low`, limitation ajoutée, bandeau « Résultat indicatif » dans le rapport",
+                    },
                 },
                 description:
                     "Les champs optionnels (search_plan, source_assessments, contradictions, timeline, context_findings, media_findings, video_findings, quote_findings, framing_findings, evidence_gaps) sont présents uniquement lorsque le skill correspondant a été exécuté.",
@@ -1191,6 +1220,12 @@ export const openApiDocument = {
                         type: "string",
                         format: "binary",
                         description: "Une image JPEG, PNG ou WebP de 4 Mo maximum",
+                    },
+                    ocr: {
+                        type: "string",
+                        enum: ["true", "false"],
+                        default: "false",
+                        description: "true : extraire aussi le texte de l'image avec l'OCR local (résultat indicatif)",
                     },
                 },
             },
@@ -1279,6 +1314,7 @@ export const openApiDocument = {
                     signals: { type: "array", items: ref("MediaSignal") },
                     analyzed_at: { type: "string", format: "date-time" },
                     disclaimer: { type: "string" },
+                    ocr: ref("MediaOcrResult"),
                 },
             },
             MediaSignalsError: {
@@ -1297,8 +1333,77 @@ export const openApiDocument = {
                             "FILE_TOO_LARGE",
                             "UNSUPPORTED_MEDIA_TYPE",
                             "UNREADABLE_IMAGE",
+                            "INVALID_OCR_FLAG",
                         ],
                     },
+                },
+            },
+            AiAttempt: {
+                type: "object",
+                required: ["provider", "outcome", "reason"],
+                properties: {
+                    provider: { type: "string", example: "groq" },
+                    outcome: {
+                        type: "string",
+                        enum: ["failed", "skipped"],
+                        description: "`skipped` : fournisseur en pause après une limite (429) ou un refus de clé",
+                    },
+                    reason: { type: "string", example: "limite de requêtes atteinte (HTTP 429)" },
+                },
+            },
+            AiProviderInfo: {
+                type: "object",
+                required: ["id", "label", "model", "kind", "indicative", "attempts"],
+                properties: {
+                    id: {
+                        type: "string",
+                        enum: ["groq", "xai", "mistral", "gemini", "huggingface", "local", "tesseract"],
+                    },
+                    label: { type: "string", example: "Gemini" },
+                    model: { type: "string", example: "gemini-2.5-flash" },
+                    kind: { type: "string", enum: ["remote", "local"] },
+                    indicative: {
+                        type: "boolean",
+                        description: "Toujours true pour un fournisseur local",
+                    },
+                    attempts: {
+                        type: "array",
+                        items: ref("AiAttempt"),
+                        description: "Fournisseurs essayés avant celui-ci, dans l'ordre",
+                    },
+                },
+                example: {
+                    id: "local",
+                    label: "Modèle local (node-llama-cpp)",
+                    model: "qwen2.5-3b-instruct-q4_k_m.gguf",
+                    kind: "local",
+                    indicative: true,
+                    attempts: [
+                        { provider: "groq", outcome: "failed", reason: "limite de requêtes atteinte (HTTP 429)" },
+                        { provider: "gemini", outcome: "failed", reason: "erreur du fournisseur (HTTP 503)" },
+                    ],
+                },
+            },
+            MediaOcrResult: {
+                type: "object",
+                required: ["status", "text", "quality", "languages", "provider"],
+                description: "Présent uniquement si `ocr=true`. Résultat local, toujours indicatif.",
+                properties: {
+                    status: {
+                        type: "string",
+                        enum: ["ok", "unavailable", "failed"],
+                        description: "`unavailable` : tesseract.js ou ses données de langue ne sont pas installés",
+                    },
+                    text: { type: "string", description: "Texte extrait, 20 000 caractères maximum" },
+                    quality: {
+                        type: "string",
+                        enum: ["low", "medium", "high"],
+                        nullable: true,
+                        description: "Qualité de lecture estimée par l'OCR (pas un niveau de véracité)",
+                    },
+                    languages: { type: "array", items: { type: "string" }, example: ["fra", "eng"] },
+                    provider: ref("AiProviderInfo"),
+                    reason: { type: "string", description: "Cause si status ≠ ok" },
                 },
             },
         },

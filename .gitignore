@@ -7,3 +7,4 @@ out/
 build/
 *.log
 "@ | Out-File -Encoding utf8 .gitignore
+models/

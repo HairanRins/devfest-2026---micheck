@@ -35,18 +35,36 @@ Open the UI with `npm run dev`, then go to <http://localhost:3000/api/docs>. The
 
 Copy `.env.example` to `.env.local` and restart `npm run dev` after any change.
 
+#### AI providers (tried in order; the first one that answers wins)
+
 | Variable | Required? | Default | Purpose |
 |---|---|---|---|
-| `CONTEXT_DETECTOR_AI_API_KEY` | **Yes** for `/claims` and `/investigate`. Without it they return **503**. | none | API key for an OpenAI-compatible model provider. The default provider is Groq; a free key is available at console.groq.com. |
-| `CONTEXT_DETECTOR_AI_BASE_URL` | No | `https://api.groq.com/openai/v1` | Any OpenAI-compatible `/chat/completions` endpoint. The model must support `response_format: json_object`. |
-| `CONTEXT_DETECTOR_AI_MODEL` | No | `llama-3.3-70b-versatile` | Model name. |
-| `CONTEXT_DETECTOR_SEARCH_PROVIDER` | No | `none` | One of `none`, `brave`, `tavily` or `generic`. With `none`, no web search runs, there is no evidence, and the verdicts are expected to be `unverifiable`. |
-| `CONTEXT_DETECTOR_SEARCH_API_KEY` | Yes when the provider is not `none` | none | Key for Brave (sent as the `X-Subscription-Token` header) or Tavily (sent as `api_key` in the body). The `generic` provider also requires it (audit bug 24). |
-| `CONTEXT_DETECTOR_SEARCH_URL` | Only for `generic` | Brave or Tavily official URL | Custom endpoint. The `generic` provider sends `POST {q, count}` and expects `{results:[{title,url,description\|snippet\|content,…}]}`. |
+| `CONTEXT_DETECTOR_AI_PROVIDERS` | No | `groq,xai,mistral,gemini,huggingface` | Order in which remote providers are tried. Providers without a key are left out. |
+| `CONTEXT_DETECTOR_GROQ_API_KEY` | **At least one key, or the local fallback, is required.** Otherwise `/claims` and `/investigate` return **503**. | none | Groq (free key at console.groq.com). The older name `CONTEXT_DETECTOR_AI_API_KEY` still works. |
+| `CONTEXT_DETECTOR_XAI_API_KEY`, `CONTEXT_DETECTOR_MISTRAL_API_KEY`, `CONTEXT_DETECTOR_GEMINI_API_KEY`, `CONTEXT_DETECTOR_HF_API_KEY` | Optional | none | Other remote providers |
+| `CONTEXT_DETECTOR_<PROVIDER>_MODEL`, `CONTEXT_DETECTOR_<PROVIDER>_BASE_URL` | No | see `ai.ts` | Override the model or endpoint for a provider |
 
-**Minimum to test:** set only `CONTEXT_DETECTOR_AI_API_KEY`. The pipeline then runs without evidence.
+#### Local fallback (ADR-002, off by default)
 
-**For a convincing demo:** also configure a search provider. Tavily or Brave both have free tiers.
+| Variable | Required? | Default | Purpose |
+|---|---|---|---|
+| `CONTEXT_DETECTOR_LOCAL_FALLBACK` | No | `off` | `on`: when every remote provider fails, Qwen2.5-3B answers locally. The result is marked `indicative`. Requires `npm run models:install` and `npm run models:download`. |
+| `CONTEXT_DETECTOR_LOCAL_MODEL_PATH` | No | `models/qwen2.5-3b-instruct-q4_k_m.gguf` | GGUF file to load, for example a 1.5B model on a machine with less RAM |
+| `CONTEXT_DETECTOR_LOCAL_TIMEOUT_MS` | No | `300000` | Time limit for each local generation |
+
+#### Web search
+
+| Variable | Required? | Default | Purpose |
+|---|---|---|---|
+| `CONTEXT_DETECTOR_SEARCH_PROVIDERS` | No | `tavily,brave,generic` | Order of search providers. The older single-value `CONTEXT_DETECTOR_SEARCH_PROVIDER` takes precedence if set. |
+| `CONTEXT_DETECTOR_TAVILY_API_KEY`, `CONTEXT_DETECTOR_BRAVE_API_KEY` | No | none | Without any search key, no search runs, there is no evidence, and verdicts are expected to be `unverifiable`. |
+| `CONTEXT_DETECTOR_SEARCH_API_KEY`, `CONTEXT_DETECTOR_SEARCH_URL`, `CONTEXT_DETECTOR_TAVILY_URL` | Only for `generic` or custom endpoints | — | The `generic` provider sends `POST {q, count}` and expects `{results:[{title,url,description\|snippet\|content,…}]}`. |
+
+**Minimum to test:** one AI key, for example `CONTEXT_DETECTOR_GROQ_API_KEY`. The pipeline then runs without evidence.
+
+**For a convincing demo:** also add a Tavily or Brave key.
+
+**Fully offline test:** no AI key, `CONTEXT_DETECTOR_LOCAL_FALLBACK=on`, and the model downloaded. Every answer then comes from the local model and is marked indicative.
 
 ### HTTP
 
@@ -67,8 +85,8 @@ The four chat endpoints share the same error format, produced by `lib/context-de
 |---|---|---|
 | 400 | Empty content, invalid JSON, or `text` longer than 20,000 characters | `{ "message": "…" }` |
 | 404 | `investigations/{id}` is unknown or has expired | `{ "message": "Aucune investigation trouvée avec l'id: …" }` |
-| 502 | The model provider is unreachable, returned an error status, or replied without valid JSON | `{ "message": "…", "error"?: "…" }` (`error` only in development) |
-| 503 | `CONTEXT_DETECTOR_AI_API_KEY` is missing | same as 502 |
+| 502 | **Every** provider failed: each remote one, plus the local model if it's on. The message lists each attempt and its reason (`groq: limite de requêtes atteinte (HTTP 429) \| …`). | `{ "message": "…", "error"?: "…" }` (`error` only in development) |
+| 503 | No remote AI key and the local fallback is off | same as 502 |
 | 500 | Any other error | `{ "message": "Internal Server Error", "error"?: "…" }` |
 
 ## 3. Request format (`/claims` and `/investigate`)
@@ -199,7 +217,14 @@ Response 201:
     "overall_verdict": { "label", "summary", "confidence", "confidence_rationale", "key_evidence_ids", "limitations" },
     "sources": [ { "source_id", "url", "title", "publisher", "published_date", "accessed_date" } ],
     "practical_takeaway": "…",
-    "limitations": ["…"]
+    "limitations": ["…"],
+    "generated_by": {                    // who answered each AI call
+      "extraction": { "id": "gemini", "label": "Gemini", "model": "gemini-2.5-flash", "kind": "remote",
+                      "indicative": false,
+                      "attempts": [ { "provider": "groq", "outcome": "failed", "reason": "limite de requêtes atteinte (HTTP 429)" } ] },
+      "analysis":   { "id": "gemini", … }
+    },
+    "indicative": false                  // true if the local model answered a step: confidences capped at "low"
   },
   "report": "## Non vérifiable — dossier de vérification\n…"   // Markdown, left out if includeReport=false
 }
@@ -227,7 +252,9 @@ Reads technical clues from one image (PRODUCT_SCOPE P1 #5, ADR-001 §3). It make
 | Size limit | 4 MB per file, 1 file per request |
 | Not returned | GPS coordinates (only `gps_present: true/false`) |
 
-**In Swagger UI:** open the endpoint, choose a file in the `file` field, then click **Execute**. Good test files:
+**OCR (ADR-002, option I1):** add the field `ocr=true` to also extract the image's text (French and English) with local `tesseract.js`. The response then includes `ocr: { status, text, quality, languages, provider }`, where `provider.kind` is `local` and `indicative` is `true`. Send `ocr.text` to `/investigate` to check what a screenshot claims. If `tesseract.js` isn't installed (`npm run models:install`), the response is still 200, with `ocr.status: "unavailable"` and the reason.
+
+**In Swagger UI:** open the endpoint, choose a file in the `file` field, optionally set `ocr` to `true`, then click **Execute**. Good test files:
 - a photo straight from a phone camera, which has EXIF data
 - a screenshot or an image downloaded from a social network, which usually has none
 - a `.gif` file, which should return 415
@@ -235,6 +262,10 @@ Reads technical clues from one image (PRODUCT_SCOPE P1 #5, ADR-001 §3). It make
 ```bash
 curl -s -X POST http://localhost:3000/api/context-detector/media-signals \
   -F "file=@/path/to/photo.jpg"
+
+# with local OCR
+curl -s -X POST http://localhost:3000/api/context-detector/media-signals \
+  -F "file=@/path/to/screenshot.png" -F "ocr=true"
 ```
 
 Response 200:
@@ -277,6 +308,7 @@ Errors use the format `{ "message": "…", "code": "…" }`:
 | 400 | `FILE_REQUIRED` | No `file` field, or `file` is text rather than a file |
 | 400 | `TOO_MANY_FILES` | More than one `file` |
 | 400 | `EMPTY_FILE` | The file has 0 bytes |
+| 400 | `INVALID_OCR_FLAG` | `ocr` is neither `true` nor `false` |
 | 413 | `FILE_TOO_LARGE` | Over 4 MB. When `Content-Length` announces it, the body is rejected **before** it is read. |
 | 415 | `MULTIPART_REQUIRED` | The request is not `multipart/form-data` |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | The real content is not JPEG, PNG or WebP (for example a GIF renamed `.png`) |
@@ -299,6 +331,9 @@ Based on the success criteria in PRODUCT_SCOPE §6.
 - [ ] With search on, every URL in `sources` comes from the search results (it is never invented), and every verdict cites at least one `evidence_ids` **or** is `unverifiable`.
 - [ ] Scenarios 2 and 3: `limitations` includes "L'analyse binaire des médias … n'a pas été effectuée."
 - [ ] `investigations/{id}` with the id from the previous call returns 200.
+- [ ] Every `/claims` and `/investigate` response says who answered (`generated_by`). With a deliberately wrong Groq key, the next provider answers and `attempts` shows `groq … HTTP 401`. On a second call, Groq appears as `skipped`.
+- [ ] With every remote key removed and `CONTEXT_DETECTOR_LOCAL_FALLBACK=on`: `generated_by.*.kind` is `local`, `indicative` is `true`, every confidence is `low`, and the report starts with "⚠️ Résultat indicatif".
+- [ ] `media-signals` with `ocr=true` on a screenshot: `ocr.status` is `ok`, the text is readable, and `ocr.provider.indicative` is `true`.
 - [ ] `media-signals` returns 200 for a JPEG, PNG and WebP, 415 for a GIF, and 413 for a file over 4 MB. A photo with GPS data returns `gps_present: true` and no coordinates.
 - [ ] The time shown by Swagger ("Duration") stays under 60 s per scenario, as PRODUCT_SCOPE §6 requires.
 
